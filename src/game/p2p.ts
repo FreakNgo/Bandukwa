@@ -1,4 +1,8 @@
+import Peer, { type DataConnection } from 'peerjs';
+
 export const MAX_ROOM_PLAYERS = 4;
+
+const PEER_PREFIX = 'bandukwa-arena-';
 
 const ICE_CONFIG: RTCConfiguration = {
   iceServers: [
@@ -14,7 +18,8 @@ const ICE_CONFIG: RTCConfiguration = {
 };
 
 export type P2PMessage =
-  | { t: 'id'; id: number; from?: number }
+  | { t: 'id'; id: number; from?: number; count?: number }
+  | { t: 'rc'; count: number; from?: number }
   | { t: 'bye'; id: number; from?: number }
   | {
       t: 's';
@@ -64,18 +69,44 @@ function waitIceComplete(pc: RTCPeerConnection): Promise<void> {
   });
 }
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+class ApiHttpError extends Error {
+  status: number;
+  hasJsonError: boolean;
+  constructor(status: number, hasJsonError: boolean, message: string) {
+    super(message);
+    this.status = status;
+    this.hasJsonError = hasJsonError;
   }
+}
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (err) {
+    throw new ApiHttpError(0, false, err instanceof Error ? err.message : 'Network error');
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+  const data = (isJson ? await res.json().catch(() => ({})) : {}) as T & { error?: string };
+
+  if (!res.ok) {
+    const hasJsonError = typeof data?.error === 'string' && data.error.length > 0;
+    throw new ApiHttpError(res.status, hasJsonError, data.error || `Request failed (${res.status})`);
+  }
+
+  if (!isJson) {
+    // e.g. Static host SPA fallback returned index.html with 200 OK for /api/*
+    throw new ApiHttpError(404, false, 'Backend API not available');
+  }
+
   return data;
 }
 
@@ -96,6 +127,13 @@ export class P2PManager {
   private queuedJoinState: P2PMessage | null = null;
   private roomPlayerCount = 1;
 
+  // Cloud PeerJS fallback state (used on static hosts like Vercel where /api/rooms is unavailable)
+  private usingPeerJs = false;
+  private peerJsInstance: Peer | null = null;
+  private peerJsConns = new Map<number, DataConnection>();
+  private peerJsHostConn: DataConnection | null = null;
+  private nextPeerJsId = 1;
+
   onStatus?: (msg: string) => void;
   onPeerCountChange?: (count: number) => void;
   onRoomChange?: (code: string | null, isHost: boolean) => void;
@@ -104,6 +142,16 @@ export class P2PManager {
 
   get connectedCount(): number {
     if (!this.roomCode) return 0;
+    if (this.usingPeerJs) {
+      if (this.isHost) {
+        let openCount = 0;
+        this.peerJsConns.forEach((conn) => {
+          if (conn.open) openCount++;
+        });
+        return openCount;
+      }
+      return this.joinDcOpen ? Math.max(1, this.roomPlayerCount - 1) : 0;
+    }
     if (this.isHost) {
       let count = 0;
       this.peers.forEach((p) => {
@@ -129,6 +177,28 @@ export class P2PManager {
 
   send(msg: P2PMessage): void {
     if (!this.roomCode) return;
+
+    if (this.usingPeerJs) {
+      if (this.isHost) {
+        msg.from = 0;
+        if (this.peerJsConns.size === 0) return;
+        const serialized = JSON.stringify(msg);
+        const targetId = 'to' in msg ? msg.to : undefined;
+        if (targetId !== undefined) {
+          const conn = this.peerJsConns.get(targetId);
+          if (conn?.open) conn.send(serialized);
+        } else {
+          this.peerJsConns.forEach((conn) => {
+            if (conn.open) conn.send(serialized);
+          });
+        }
+        return;
+      }
+      if (this.peerJsHostConn?.open) {
+        this.peerJsHostConn.send(JSON.stringify(msg));
+      }
+      return;
+    }
 
     if (this.isHost) {
       msg.from = 0;
@@ -197,16 +267,25 @@ export class P2PManager {
     this.roomPlayerCount = 1;
     this.emitStatus('Creating 4-player arena room...');
 
-    const created = await apiJson<{ code: string; maxPlayers: number }>('/api/rooms', {
-      method: 'POST',
-    });
-    this.roomCode = created.code;
-    this.emitRoom();
-    this.emitCount();
-    this.emitStatus(`Room ${created.code} live (1/${MAX_ROOM_PLAYERS} players). Share code to join.`);
+    try {
+      const created = await apiJson<{ code: string; maxPlayers: number }>('/api/rooms', {
+        method: 'POST',
+      });
+      this.usingPeerJs = false;
+      this.roomCode = created.code;
+      this.emitRoom();
+      this.emitCount();
+      this.emitStatus(`Room ${created.code} live (1/${MAX_ROOM_PLAYERS} players). Share code to join.`);
 
-    this.startHostPolling(created.code);
-    return created.code;
+      this.startHostPolling(created.code);
+      return created.code;
+    } catch (err) {
+      // Static hosts (Vercel, Netlify, GitHub Pages) return 404/405/non-JSON for /api/rooms
+      if (err instanceof ApiHttpError && (err.status === 404 || err.status === 405 || err.status === 0 || !err.hasJsonError)) {
+        return this.hostRoomViaPeerJs();
+      }
+      throw err;
+    }
   }
 
   async joinRoom(rawCode: string): Promise<void> {
@@ -219,11 +298,24 @@ export class P2PManager {
     this.isHost = false;
     this.emitStatus(`Connecting to room ${code}...`);
 
-    const joined = await apiJson<{ code: string; peerId: number; playerCount: number }>(
-      `/api/rooms/${code}/join`,
-      { method: 'POST' },
-    );
+    let joined: { code: string; peerId: number; playerCount: number };
+    try {
+      joined = await apiJson<{ code: string; peerId: number; playerCount: number }>(
+        `/api/rooms/${code}/join`,
+        { method: 'POST' },
+      );
+    } catch (err) {
+      if (err instanceof ApiHttpError && err.status === 409) {
+        throw err;
+      }
+      // Static host (404/405/non-JSON) or cross-host room: connect via cloud PeerJS signaling
+      if (err instanceof ApiHttpError && (err.status === 404 || err.status === 405 || err.status === 0 || !err.hasJsonError)) {
+        return this.joinRoomViaPeerJs(code);
+      }
+      throw err;
+    }
 
+    this.usingPeerJs = false;
     this.roomCode = joined.code;
     this.myId = joined.peerId;
     this.roomPlayerCount = joined.playerCount;
@@ -362,16 +454,36 @@ export class P2PManager {
     });
   }
 
-  private handleIncomingRaw(raw: string): void {
-    try {
-      const m = JSON.parse(raw) as P2PMessage;
-      if (m.t === 'id') {
-        this.myId = m.id;
-      } else {
-        this.onMessage?.(m);
+  private parseRawMessage(raw: unknown): P2PMessage | null {
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw) as P2PMessage;
+      } catch {
+        return null;
       }
-    } catch {
-      // ignore malformed packet
+    }
+    if (raw && typeof raw === 'object') {
+      return raw as P2PMessage;
+    }
+    return null;
+  }
+
+  private handleIncomingRaw(raw: string): void {
+    const m = this.parseRawMessage(raw);
+    if (!m) return;
+    if (m.t === 'id') {
+      this.myId = m.id;
+      if (typeof m.count === 'number') {
+        this.roomPlayerCount = m.count;
+        this.emitCount();
+      }
+    } else if (m.t === 'rc') {
+      this.roomPlayerCount = m.count;
+      this.emitCount();
+    } else if (m.t === 'bye') {
+      this.onPeerLeft?.(m.id);
+    } else {
+      this.onMessage?.(m);
     }
   }
 
@@ -599,6 +711,216 @@ export class P2PManager {
     }
   }
 
+  private async hostRoomViaPeerJs(attempt = 0): Promise<string> {
+    const code = String(Math.floor(10000 + Math.random() * 90000));
+    const hostPeerId = `${PEER_PREFIX}${code}`;
+
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      const peer = new Peer(hostPeerId, { config: ICE_CONFIG });
+      this.peerJsInstance = peer;
+
+      const timeout = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          peer.destroy();
+        } catch {
+          // ignore
+        }
+        this.peerJsInstance = null;
+        reject(new Error('Could not reach P2P signaling network. Check your connection.'));
+      }, 10000);
+
+      peer.on('open', () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        this.usingPeerJs = true;
+        this.isHost = true;
+        this.myId = 0;
+        this.nextPeerJsId = 1;
+        this.roomPlayerCount = 1;
+        this.roomCode = code;
+        this.emitRoom();
+        this.emitCount();
+        this.emitStatus(`Room ${code} live (1/${MAX_ROOM_PLAYERS} players). Share code to join.`);
+        resolve(code);
+      });
+
+      peer.on('error', (err) => {
+        if (!settled) {
+          settled = true;
+          window.clearTimeout(timeout);
+          try {
+            peer.destroy();
+          } catch {
+            // ignore
+          }
+          this.peerJsInstance = null;
+          if (err.type === 'unavailable-id' && attempt < 4) {
+            void this.hostRoomViaPeerJs(attempt + 1).then(resolve, reject);
+            return;
+          }
+          reject(new Error(err.message || 'Unable to create P2P room.'));
+        }
+      });
+
+      peer.on('connection', (conn) => {
+        if (this.peerJsConns.size >= MAX_ROOM_PLAYERS - 1) {
+          conn.on('open', () => {
+            conn.send(JSON.stringify({ t: 'bye', id: -1 }));
+            window.setTimeout(() => conn.close(), 150);
+          });
+          return;
+        }
+
+        const peerId = this.nextPeerJsId++;
+        this.peerJsConns.set(peerId, conn);
+
+        const broadcastCount = () => {
+          const total = 1 + this.peerJsConns.size;
+          this.roomPlayerCount = total;
+          const pkt = JSON.stringify({ t: 'rc', count: total } satisfies P2PMessage);
+          this.peerJsConns.forEach((c) => {
+            if (c.open) c.send(pkt);
+          });
+          this.emitCount();
+        };
+
+        conn.on('open', () => {
+          const total = 1 + this.peerJsConns.size;
+          this.roomPlayerCount = total;
+          conn.send(JSON.stringify({ t: 'id', id: peerId, count: total } satisfies P2PMessage));
+          broadcastCount();
+          this.emitStatus(`Player #${peerId} connected (${total}/${MAX_ROOM_PLAYERS}).`);
+        });
+
+        conn.on('data', (raw) => {
+          const m = this.parseRawMessage(raw);
+          if (!m) return;
+          m.from = peerId;
+          const targetId = 'to' in m ? m.to : undefined;
+          if (targetId !== undefined && targetId !== 0) {
+            const dest = this.peerJsConns.get(targetId);
+            if (dest?.open) dest.send(JSON.stringify(m));
+          } else {
+            if (targetId === undefined) {
+              const serialized = JSON.stringify(m);
+              this.peerJsConns.forEach((other, pid) => {
+                if (pid !== peerId && other.open) {
+                  other.send(serialized);
+                }
+              });
+            }
+            this.onMessage?.(m);
+          }
+        });
+
+        conn.on('close', () => {
+          if (!this.peerJsConns.has(peerId)) return;
+          this.peerJsConns.delete(peerId);
+          this.onPeerLeft?.(peerId);
+          this.send({ t: 'bye', id: peerId });
+          broadcastCount();
+          this.emitStatus(`Player #${peerId} left.`);
+        });
+      });
+    });
+  }
+
+  private async joinRoomViaPeerJs(code: string): Promise<void> {
+    const targetId = `${PEER_PREFIX}${code}`;
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const peer = new Peer({ config: ICE_CONFIG });
+      this.peerJsInstance = peer;
+
+      const fail = (msg: string) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        void this.leaveRoom();
+        reject(new Error(msg));
+      };
+
+      const timeout = window.setTimeout(() => {
+        fail('Timed out waiting for host response.');
+      }, 12000);
+
+      peer.on('error', (err) => {
+        if (!settled) {
+          if (err.type === 'peer-unavailable') {
+            fail('Room code not found. Check the 5-digit code.');
+          } else {
+            fail(err.message || 'Failed to connect to P2P room.');
+          }
+        }
+      });
+
+      peer.on('open', () => {
+        const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
+        this.peerJsHostConn = conn;
+
+        conn.on('open', () => {
+          this.usingPeerJs = true;
+          this.isHost = false;
+          this.joinDcOpen = true;
+          this.roomCode = code;
+          this.emitRoom();
+        });
+
+        conn.on('data', (raw) => {
+          const m = this.parseRawMessage(raw);
+          if (!m) return;
+          if (m.t === 'bye' && m.id === -1) {
+            fail(`Room is full (${MAX_ROOM_PLAYERS}/${MAX_ROOM_PLAYERS} players).`);
+            return;
+          }
+          if (m.t === 'id') {
+            this.myId = m.id;
+            this.roomPlayerCount = m.count ?? 2;
+            if (!settled) {
+              settled = true;
+              window.clearTimeout(timeout);
+              this.emitCount();
+              this.emitStatus(`Connected to room ${code} (${this.roomPlayerCount}/${MAX_ROOM_PLAYERS}).`);
+              resolve();
+            }
+            return;
+          }
+          if (m.t === 'rc') {
+            this.roomPlayerCount = m.count;
+            this.emitCount();
+            return;
+          }
+          if (m.t === 'bye') {
+            this.onPeerLeft?.(m.id);
+            return;
+          }
+          this.onMessage?.(m);
+        });
+
+        conn.on('close', () => {
+          if (!settled) {
+            fail('Host closed the connection.');
+            return;
+          }
+          this.joinDcOpen = false;
+          this.emitCount();
+          if (this.roomCode === code) {
+            this.emitStatus('Disconnected from host.');
+          }
+        });
+
+        conn.on('error', () => {
+          fail('Unable to reach host.');
+        });
+      });
+    });
+  }
+
   async leaveRoom(): Promise<void> {
     if (this.pollTimer !== null) {
       clearTimeout(this.pollTimer);
@@ -607,10 +929,30 @@ export class P2PManager {
 
     const oldCode = this.roomCode;
     const oldId = this.myId;
+    const wasPeerJs = this.usingPeerJs;
     this.roomCode = null;
+    this.usingPeerJs = false;
     this.joinDcOpen = false;
     this.joinRelayActive = false;
     this.roomPlayerCount = 1;
+    this.nextPeerJsId = 1;
+
+    this.peerJsConns.forEach((conn) => {
+      try {
+        conn.close();
+      } catch {
+        // ignore
+      }
+    });
+    this.peerJsConns.clear();
+    try {
+      this.peerJsHostConn?.close();
+      this.peerJsInstance?.destroy();
+    } catch {
+      // ignore
+    }
+    this.peerJsHostConn = null;
+    this.peerJsInstance = null;
 
     this.peers.forEach(({ pc, dc }) => {
       try {
@@ -631,7 +973,7 @@ export class P2PManager {
     this.hostDc = null;
     this.joinPc = null;
 
-    if (oldCode) {
+    if (oldCode && !wasPeerJs) {
       fetch(`/api/rooms/${oldCode}/leave`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
