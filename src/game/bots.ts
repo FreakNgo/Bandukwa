@@ -60,7 +60,7 @@ export class BotManager {
     private weaponCache: WeaponModelCache,
   ) {}
 
-  syncCount(count: number): void {
+  syncCount(count: number, avoidPos?: THREE.Vector3): void {
     const clamped = Math.max(0, Math.min(6, count));
     while (this.bots.length > clamped) {
       const removed = this.bots.pop();
@@ -103,7 +103,7 @@ export class BotManager {
         waypoint: WAYPOINTS[Math.floor(Math.random() * WAYPOINTS.length)],
         visual,
       };
-      this.spawnBot(bot);
+      this.spawnBot(bot, avoidPos);
       this.bots.push(bot);
     }
   }
@@ -146,8 +146,13 @@ export class BotManager {
     let best = SPAWN_POINTS[0];
     let bestScore = -1;
     for (const sp of SPAWN_POINTS) {
-      const dist = avoidPos ? Math.hypot(sp[0] - avoidPos.x, sp[1] - avoidPos.z) : 14;
-      const score = dist + Math.random() * 8;
+      let minDist = avoidPos ? Math.hypot(sp[0] - avoidPos.x, sp[1] - avoidPos.z) : 14;
+      for (const other of this.bots) {
+        if (other !== bot && other.hp > 0) {
+          minDist = Math.min(minDist, Math.hypot(sp[0] - other.pos.x, sp[1] - other.pos.z));
+        }
+      }
+      const score = minDist + Math.random() * 1.5;
       if (score > bestScore) {
         bestScore = score;
         best = sp;

@@ -163,6 +163,7 @@ function createBulletHoleTexture(): THREE.CanvasTexture {
 
 export class BandukwaEngine {
   readonly isSoftwareGl: boolean;
+  readonly isTouchDevice: boolean;
   readonly isLowSpecDevice: boolean;
   readonly renderer: THREE.WebGLRenderer;
   readonly scene: THREE.Scene;
@@ -170,7 +171,10 @@ export class BandukwaEngine {
   readonly p2p = new P2PManager();
 
   private container: HTMLElement;
+  private hemiLight: THREE.HemisphereLight;
   private sunLight: THREE.DirectionalLight;
+  private envMap: THREE.Texture | null = null;
+  private hadParticlesLastFrame = false;
   private effectiveQuality: 'low' | 'balanced' | 'high' = 'balanced';
   private autoDowngraded = false;
   private frameEmaMs = 16.6;
@@ -358,10 +362,15 @@ export class BandukwaEngine {
     this.onPauseRequested = onPauseRequested;
 
     this.isSoftwareGl = detectSoftwareWebGL();
+    this.isTouchDevice =
+      typeof window !== 'undefined' &&
+      (window.matchMedia?.('(pointer: coarse)').matches ||
+        'ontouchstart' in window ||
+        navigator.maxTouchPoints > 0);
     this.isLowSpecDevice =
       this.isSoftwareGl ||
-      (typeof navigator !== 'undefined' && (navigator.hardwareConcurrency || 8) <= 4) ||
-      (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
+      this.isTouchDevice ||
+      (typeof navigator !== 'undefined' && (navigator.hardwareConcurrency || 8) <= 4);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl && !this.isLowSpecDevice,
@@ -374,16 +383,13 @@ export class BandukwaEngine {
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
+    this.renderer.domElement.style.touchAction = 'none';
     container.appendChild(this.renderer.domElement);
 
     // Scene & atmospheric desert sky
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xd7c5a5);
     this.scene.fog = new THREE.FogExp2(0xd7c5a5, 0.0085);
-
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
 
     this.camera = new THREE.PerspectiveCamera(
       this.settings.fov,
@@ -395,8 +401,8 @@ export class BandukwaEngine {
     this.scene.add(this.camera);
 
     // Three-point warm desert sun + cool sky hemisphere fill + rim light
-    const hemi = new THREE.HemisphereLight(0xdcebff, 0x9b8259, 0.72);
-    this.scene.add(hemi);
+    this.hemiLight = new THREE.HemisphereLight(0xdcebff, 0x9b8259, 0.72);
+    this.scene.add(this.hemiLight);
 
     this.sunLight = new THREE.DirectionalLight(0xfff1d4, 1.38);
     this.sunLight.position.set(22, 38, 18);
@@ -550,7 +556,7 @@ export class BandukwaEngine {
     const q = this.settings.graphicsQuality ?? 'auto';
     let tier: 'low' | 'balanced' | 'high';
     if (q === 'auto') {
-      if (this.isSoftwareGl || this.autoDowngraded) {
+      if (this.isSoftwareGl || this.autoDowngraded || this.isTouchDevice) {
         tier = 'low';
       } else if (this.isLowSpecDevice) {
         tier = 'balanced';
@@ -564,27 +570,41 @@ export class BandukwaEngine {
     this.effectiveQuality = tier;
     const rawDpr = window.devicePixelRatio || 1;
     const dpr =
-      tier === 'low' ? 1 : tier === 'balanced' ? Math.min(rawDpr, 1.35) : Math.min(rawDpr, 1.75);
+      tier === 'low' ? 1 : tier === 'balanced' ? Math.min(rawDpr, 1.25) : Math.min(rawDpr, 1.6);
     this.renderer.setPixelRatio(dpr);
+
+    // Disable expensive IBL PMREM lookup on mobile/low tier and boost hemisphere light to match
+    if (tier === 'low') {
+      this.scene.environment = null;
+      this.hemiLight.intensity = 1.18;
+    } else {
+      if (!this.envMap) {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        this.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+        pmrem.dispose();
+      }
+      this.scene.environment = this.envMap;
+      this.hemiLight.intensity = 0.72;
+    }
 
     const wantShadows = !this.isSoftwareGl && this.settings.shadows && tier !== 'low';
     this.renderer.shadowMap.enabled = wantShadows;
     this.sunLight.castShadow = wantShadows;
 
     const targetShadowSize = tier === 'high' ? 1536 : 1024;
-    if (this.sunLight.shadow.mapSize.x !== targetShadowSize) {
+    if (wantShadows && this.sunLight.shadow.mapSize.x !== targetShadowSize) {
       this.sunLight.shadow.mapSize.set(targetShadowSize, targetShadowSize);
       this.sunLight.shadow.map?.dispose();
       this.sunLight.shadow.map = null;
     }
     this.renderer.shadowMap.type = tier === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
-    this.maxDustPuffs = tier === 'low' ? 12 : tier === 'balanced' ? 24 : 36;
-    this.maxDecals = tier === 'low' ? 24 : tier === 'balanced' ? 40 : 56;
+    this.maxDustPuffs = tier === 'low' ? 10 : tier === 'balanced' ? 20 : 36;
+    this.maxDecals = tier === 'low' ? 20 : tier === 'balanced' ? 36 : 56;
   }
 
   private syncBotsForMode(): void {
     const inMultiplayerRoom = this.p2p.roomCode !== null;
-    this.botManager.syncCount(inMultiplayerRoom ? 0 : this.settings.botCount);
+    this.botManager.syncCount(inMultiplayerRoom ? 0 : this.settings.botCount, this.pos);
   }
 
   updateSettings(next: SettingsState): void {
@@ -608,7 +628,7 @@ export class BandukwaEngine {
     }
     if (!this.started) {
       this.started = true;
-      this.spawnPlayer();
+      this.spawnPlayer(true);
     }
     this.syncBotsForMode();
     this.equipViewmodel();
@@ -620,10 +640,23 @@ export class BandukwaEngine {
       this.softLocked = true;
       this.setPlaying(true);
     }
+    this.broadcastPlayerState();
+  }
+
+  private resetMatchStateForRoom(): void {
+    this.started = false;
+    this.softLocked = false;
+    this.setPlaying(false);
+    this.deadTimer = 0;
+    this.hp = 100;
+    this.me.kills = 0;
+    this.me.deaths = 0;
+    this.killFeed = [];
   }
 
   async hostMultiplayer(callsign: string): Promise<string> {
     this.me.name = (callsign.trim() || 'Operator').slice(0, 14);
+    this.resetMatchStateForRoom();
     this.botManager.syncCount(0);
     const code = await this.p2p.hostRoom();
     this.syncBotsForMode();
@@ -633,6 +666,7 @@ export class BandukwaEngine {
 
   async joinMultiplayer(code: string, callsign: string): Promise<void> {
     this.me.name = (callsign.trim() || 'Operator').slice(0, 14);
+    this.resetMatchStateForRoom();
     this.botManager.syncCount(0);
     await this.p2p.joinRoom(code);
     this.syncBotsForMode();
@@ -645,6 +679,7 @@ export class BandukwaEngine {
       r.visual.dispose();
     });
     this.remotes.clear();
+    this.resetMatchStateForRoom();
     await this.p2p.leaveRoom();
     this.syncBotsForMode();
     this.emitHud();
@@ -887,21 +922,46 @@ export class BandukwaEngine {
     );
   }
 
-  private spawnPlayer(): void {
-    let best = SPAWN_POINTS[0];
-    let bestScore = -1;
-    for (const sp of SPAWN_POINTS) {
-      let minDist = 99;
-      this.remotes.forEach((r) => {
+  private minEnemyDistToSpawn(sp: readonly [number, number]): number {
+    let minDist = 99;
+    this.remotes.forEach((r) => {
+      if (r.hp > 0) {
         minDist = Math.min(minDist, Math.hypot(r.pos.x - sp[0], r.pos.z - sp[1]));
-      });
-      this.botManager.bots.forEach((b) => {
+      }
+    });
+    this.botManager.bots.forEach((b) => {
+      if (b.hp > 0 && b.respawnTimer <= 0) {
         minDist = Math.min(minDist, Math.hypot(b.pos.x - sp[0], b.pos.z - sp[1]));
-      });
-      const score = minDist + Math.random() * 8;
-      if (score > bestScore) {
-        bestScore = score;
-        best = sp;
+      }
+    });
+    return minDist;
+  }
+
+  private spawnPlayer(isInitialDeploy = false): void {
+    let best = SPAWN_POINTS[0];
+    if (this.p2p.roomCode !== null && isInitialDeploy) {
+      // Deterministic opposite-corner spawn per peer ID (0 = NW, 1 = SE opposite, 2 = NE, 3 = SW)
+      const slot = SPAWN_POINTS[Math.abs(this.p2p.myId) % 4];
+      if (this.remotes.size === 0 || this.minEnemyDistToSpawn(slot) >= 10) {
+        best = slot;
+      } else {
+        let bestScore = -1;
+        for (const sp of SPAWN_POINTS) {
+          const score = this.minEnemyDistToSpawn(sp) + Math.random() * 1.2;
+          if (score > bestScore) {
+            bestScore = score;
+            best = sp;
+          }
+        }
+      }
+    } else {
+      let bestScore = -1;
+      for (const sp of SPAWN_POINTS) {
+        const score = this.minEnemyDistToSpawn(sp) + Math.random() * 1.2;
+        if (score > bestScore) {
+          bestScore = score;
+          best = sp;
+        }
       }
     }
     this.pos.set(best[0], 0, best[1]);
@@ -926,6 +986,9 @@ export class BandukwaEngine {
     this.grenades = this.maxGrenades;
     this.grenadeRefillTimer = 0;
     this.ammo = WEAPON_SPECS.map((w) => w.mag);
+    if (this.started && this.p2p.connectedCount > 0) {
+      this.broadcastPlayerState();
+    }
     this.emitHud();
   }
 
@@ -1421,10 +1484,18 @@ export class BandukwaEngine {
     switch (m.t) {
       case 's': {
         if (m.from === undefined) return;
+        const isNew = !this.remotes.has(m.from);
         const r = this.getOrCreateRemote(m.from, String(m.n || 'Player').slice(0, 14));
         r.name = String(m.n || 'Player').slice(0, 14);
         r.targetPos.set(m.p[0], m.p[1], m.p[2]);
         r.targetYaw = m.r;
+        if (isNew) {
+          r.pos.copy(r.targetPos);
+          r.lastPos.copy(r.targetPos);
+          r.yaw = m.r;
+          r.visual.root.position.copy(r.pos);
+          r.visual.root.rotation.y = r.yaw;
+        }
         r.pitch = m.q;
         r.crouching = Boolean(m.sl);
         r.hp = m.hp;
@@ -2358,9 +2429,11 @@ export class BandukwaEngine {
       this.damageAngle = null;
     }
 
-    // Update particles
+    // Update particles (skip GPU buffer uploads when particle pool is idle)
+    let anyParticleAlive = false;
     for (let i = 0; i < this.MAX_PARTICLES; i++) {
       if (this.partLife[i] > 0) {
+        anyParticleAlive = true;
         this.partLife[i] -= dt;
         this.partVel[i * 3 + 1] -= 9 * dt;
         this.partPos[i * 3] += this.partVel[i * 3] * dt;
@@ -2370,12 +2443,15 @@ export class BandukwaEngine {
         this.partCol[i * 3] = this.partMaxCol[i * 3] * fade;
         this.partCol[i * 3 + 1] = this.partMaxCol[i * 3 + 1] * fade;
         this.partCol[i * 3 + 2] = this.partMaxCol[i * 3 + 2] * fade;
-      } else {
+      } else if (this.hadParticlesLastFrame) {
         this.partCol[i * 3] = this.partCol[i * 3 + 1] = this.partCol[i * 3 + 2] = 0;
       }
     }
-    this.partGeo.attributes.position.needsUpdate = true;
-    this.partGeo.attributes.color.needsUpdate = true;
+    if (anyParticleAlive || this.hadParticlesLastFrame) {
+      this.partGeo.attributes.position.needsUpdate = true;
+      this.partGeo.attributes.color.needsUpdate = true;
+    }
+    this.hadParticlesLastFrame = anyParticleAlive;
 
     // Update tracers
     for (let i = this.tracers.length - 1; i >= 0; i--) {
@@ -2465,31 +2541,35 @@ export class BandukwaEngine {
     this.netSyncAccum += dt;
     if (this.netSyncAccum >= netSyncInterval) {
       this.netSyncAccum = 0;
-      if (this.started && this.p2p.connectedCount > 0) {
-        this.p2p.send({
-          t: 's',
-          n: this.me.name,
-          p: [Number(this.pos.x.toFixed(2)), Number(this.pos.y.toFixed(2)), Number(this.pos.z.toFixed(2))],
-          r: Number(this.yaw.toFixed(3)),
-          q: Number(this.pitch.toFixed(3)),
-          w: this.weaponIdx,
-          sl: this.crouching ? 1 : 0,
-          hp: this.hp,
-          kl: this.me.kills,
-          dt: this.me.deaths,
-        });
-      }
+      this.broadcastPlayerState();
     }
 
-    // Periodic HUD refresh (~20 Hz) so React HUD stays crisp without choking frames
+    // Periodic HUD refresh (~10 Hz idle, ~4 Hz in menu; discrete combat actions emit immediately)
+    const hudInterval = this.playing ? 0.1 : 0.25;
     this.hudSyncAccum += dt;
-    if (this.hudSyncAccum >= 0.05) {
+    if (this.hudSyncAccum >= hudInterval) {
       this.hudSyncAccum = 0;
       this.emitHud();
     }
 
     this.renderer.render(this.scene, this.camera);
     this.scheduleNextTick();
+  }
+
+  private broadcastPlayerState(): void {
+    if (!this.started || this.p2p.connectedCount <= 0) return;
+    this.p2p.send({
+      t: 's',
+      n: this.me.name,
+      p: [Number(this.pos.x.toFixed(2)), Number(this.pos.y.toFixed(2)), Number(this.pos.z.toFixed(2))],
+      r: Number(this.yaw.toFixed(3)),
+      q: Number(this.pitch.toFixed(3)),
+      w: this.weaponIdx,
+      sl: this.crouching ? 1 : 0,
+      hp: this.hp,
+      kl: this.me.kills,
+      dt: this.me.deaths,
+    });
   }
 
   private emitHud(): void {
@@ -2671,6 +2751,8 @@ export class BandukwaEngine {
     this.blastGeo.dispose();
     this.grenadeBodyMat.dispose();
     this.grenadeCollarMat.dispose();
+    this.envMap?.dispose();
+    this.envMap = null;
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode === this.container) {
       this.container.removeChild(this.renderer.domElement);

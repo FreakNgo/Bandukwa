@@ -73,20 +73,29 @@ export async function enterGameFullscreen(): Promise<boolean> {
     await lockGameKeyboard();
     return true;
   }
-  const el = document.documentElement as FullscreenEl;
-  try {
-    if (el.requestFullscreen) {
-      await el.requestFullscreen({ navigationUI: 'hide' });
-    } else if (el.webkitRequestFullscreen) {
-      await el.webkitRequestFullscreen();
-    } else {
-      return false;
+  const targets = [document.documentElement, document.body] as FullscreenEl[];
+  for (const el of targets) {
+    if (!el) continue;
+    try {
+      if (el.requestFullscreen) {
+        try {
+          await el.requestFullscreen({ navigationUI: 'hide' });
+        } catch {
+          await el.requestFullscreen();
+        }
+        await lockGameKeyboard();
+        return true;
+      }
+      if (el.webkitRequestFullscreen) {
+        await el.webkitRequestFullscreen();
+        await lockGameKeyboard();
+        return true;
+      }
+    } catch {
+      // try next target or fall back silently
     }
-    await lockGameKeyboard();
-    return true;
-  } catch {
-    return false;
   }
+  return false;
 }
 
 export async function exitGameFullscreen(): Promise<void> {

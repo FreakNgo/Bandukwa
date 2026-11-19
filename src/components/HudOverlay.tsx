@@ -104,7 +104,7 @@ export function HudOverlay({
   };
 
   return (
-    <div className="hud-lock pointer-events-none fixed inset-0 z-10">
+    <div className="hud-lock pointer-events-none fixed inset-0 z-30">
       {/* Damage edge vignette */}
       <div
         className="pointer-events-none fixed inset-0 transition-opacity duration-150"
@@ -223,7 +223,7 @@ export function HudOverlay({
       {/* Responsive Non-Overlapping Top HUD Row */}
       <div
         style={hudOpacityStyle}
-        className="fixed inset-x-[max(0.65rem,env(safe-area-inset-left))] top-[max(0.5rem,env(safe-area-inset-top))] z-20 flex items-start justify-between gap-2 sm:inset-x-5 sm:top-4"
+        className="fixed inset-x-[max(0.65rem,env(safe-area-inset-left))] top-[max(0.5rem,env(safe-area-inset-top))] z-40 flex items-start justify-between gap-2 sm:inset-x-5 sm:top-4"
       >
         {/* Top-Left: Tactical Radar + Mobile HP/Room or Desktop Killfeed */}
         <div className="flex items-start gap-2.5">
@@ -234,7 +234,7 @@ export function HudOverlay({
           {isMobileHud ? (
             <div className="flex flex-col gap-1.5">
               {/* Compact Mobile HP & Stance */}
-              <div className="rounded-xl border border-white/12 bg-[#0b0f14]/80 px-2.5 py-1.5 backdrop-blur-sm">
+              <div className="rounded-xl border border-white/12 bg-[#0b0f14]/88 px-2.5 py-1.5">
                 <div className="mb-1 flex items-baseline justify-between gap-3">
                   <span className="font-mono text-base font-bold tabular-nums leading-none text-white">
                     {hud.hp}
@@ -257,9 +257,10 @@ export function HudOverlay({
                   <span className="font-mono font-bold tracking-wider text-amber-400">{hud.roomCode}</span>
                   <button
                     type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={copyRoomCode}
                     title="Copy room code"
-                    className="text-[#cbd5e1] active:text-white"
+                    className="touch-manipulation text-[#cbd5e1] active:text-white"
                   >
                     {copiedCode ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
                   </button>
@@ -323,18 +324,19 @@ export function HudOverlay({
           <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={onToggleFullscreen}
               title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
               className={
                 isMobileHud
-                  ? 'flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-[#0b0f14]/82 text-[#e2e8f0] active:scale-95'
-                  : 'flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/12 bg-[#0b0f14]/82 px-2.5 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap'
+                  ? 'touch-manipulation flex h-10 w-10 items-center justify-center rounded-full border border-white/18 bg-[#0b0f14]/90 text-[#e2e8f0] active:scale-95'
+                  : 'flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/12 bg-[#0b0f14]/88 px-2.5 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap'
               }
             >
               {isFullscreen ? (
-                <Minimize2 className="h-3.5 w-3.5 text-amber-400" />
+                <Minimize2 className="h-4 w-4 text-amber-400" />
               ) : (
-                <Maximize2 className="h-3.5 w-3.5 text-amber-400" />
+                <Maximize2 className="h-4 w-4 text-amber-400" />
               )}
               {!isMobileHud && (
                 <span className="hidden md:inline">{isFullscreen ? 'Exit Full' : 'Fullscreen'}</span>
@@ -342,35 +344,37 @@ export function HudOverlay({
             </button>
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={onOpenSettings}
               title="Settings"
               className={
                 isMobileHud
-                  ? 'flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-[#0b0f14]/82 text-[#e2e8f0] active:scale-95'
-                  : 'flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/12 bg-[#0b0f14]/82 px-3 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap'
+                  ? 'touch-manipulation flex h-10 w-10 items-center justify-center rounded-full border border-white/18 bg-[#0b0f14]/90 text-[#e2e8f0] active:scale-95'
+                  : 'flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/12 bg-[#0b0f14]/88 px-3 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap'
               }
             >
-              <Settings className="h-3.5 w-3.5 text-amber-400" />
+              <Settings className="h-4 w-4 text-amber-400" />
               {!isMobileHud && <span className="hidden sm:inline">Settings</span>}
             </button>
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={onPause}
               title="Menu"
               className={
                 isMobileHud
-                  ? 'flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-[#0b0f14]/82 text-[#e2e8f0] active:scale-95'
-                  : 'flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/12 bg-[#0b0f14]/82 px-3 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap'
+                  ? 'touch-manipulation flex h-10 w-10 items-center justify-center rounded-full border border-white/18 bg-[#0b0f14]/90 text-[#e2e8f0] active:scale-95'
+                  : 'flex min-h-[38px] items-center gap-1.5 rounded-lg border border-white/12 bg-[#0b0f14]/88 px-3 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap'
               }
             >
-              <Pause className="h-3.5 w-3.5" />
+              <Pause className="h-4 w-4" />
               {!isMobileHud && <span className="hidden sm:inline">Menu</span>}
             </button>
           </div>
 
           {isMobileHud ? (
             /* Mobile Compact Top-Right Ammo, Reload Stage & Weapon Card */
-            <div className="rounded-xl border border-white/12 bg-[#0b0f14]/80 px-2.5 py-1.5 text-right backdrop-blur-sm">
+            <div className="rounded-xl border border-white/12 bg-[#0b0f14]/88 px-2.5 py-1.5 text-right">
               {hud.reloading ? (
                 <div>
                   <div className="flex items-center justify-end gap-1 font-display text-[11px] font-bold text-amber-400">

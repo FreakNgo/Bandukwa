@@ -151,7 +151,7 @@ export function TouchControls({
 
   const showSlideMode = sprinting || sliding;
   const circleBtnBase =
-    'pointer-events-auto touch-none select-none flex flex-col items-center justify-center rounded-full border backdrop-blur-sm shadow-lg transition-transform active:scale-90';
+    'pointer-events-auto touch-none select-none flex flex-col items-center justify-center rounded-full border shadow-lg transition-transform active:scale-90';
 
   const getCustomStyle = (id: CustomHudId): React.CSSProperties | undefined => {
     const custom = touchLayout[id];

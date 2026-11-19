@@ -5,10 +5,10 @@ import type { ArenaOBB } from '../types/game';
 export const ARENA_HALF_EXTENT = 14.0;
 
 export const SPAWN_POINTS: ReadonlyArray<readonly [number, number]> = [
-  [-11.8, -11.5],
-  [11.8, -11.5],
-  [-11.8, 11.8],
-  [11.8, 11.8],
+  [-11.8, -11.5], // Slot 0 (Host): NW corner
+  [11.8, 11.8],   // Slot 1 (Peer #1): SE corner (opposite Host)
+  [11.8, -11.5],  // Slot 2 (Peer #2): NE corner
+  [-11.8, 11.8],  // Slot 3 (Peer #3): SW corner (opposite Peer #2)
   [-0.2, -12.0],
   [0.2, 12.2],
   [-11.5, 0.0],
@@ -80,7 +80,8 @@ function createSandTexture(renderer: THREE.WebGLRenderer): THREE.CanvasTexture {
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(12, 12);
-  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const isTouch = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
+  tex.anisotropy = Math.min(isTouch ? 2 : 4, renderer.capabilities.getMaxAnisotropy());
   return tex;
 }
 
@@ -127,7 +128,7 @@ export class ArenaMap {
     );
     farDesert.rotation.x = -Math.PI / 2;
     farDesert.position.y = -0.03;
-    farDesert.receiveShadow = true;
+    farDesert.receiveShadow = false;
     this.scene.add(farDesert);
   }
 
