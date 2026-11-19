@@ -197,32 +197,32 @@ export function LobbyModal({
 
     return (
       <div
-        className="fixed inset-0 z-40 flex flex-col justify-between overflow-y-auto bg-gradient-to-b from-[#07111a]/92 via-[#091823]/88 to-[#050b11]/95 text-[#eef2f6] backdrop-blur-[4px]"
+        className="fixed inset-0 z-40 flex h-[100dvh] flex-col overflow-hidden bg-gradient-to-b from-[#07111a]/92 via-[#091823]/88 to-[#050b11]/95 text-[#eef2f6] backdrop-blur-[4px]"
         role="dialog"
         aria-label="Operator Identity Setup"
       >
         {/* Top Bar */}
-        <header className="mx-auto flex w-full max-w-[1280px] items-center justify-between gap-4 border-b border-white/10 px-4 py-3.5 sm:px-8 sm:py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 rotate-45 items-center justify-center border border-amber-400/60 bg-[#0d1924]">
+        <header className="mx-auto flex w-full max-w-[1280px] shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2 sm:px-8 sm:py-3.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex h-7 w-7 shrink-0 rotate-45 items-center justify-center border border-amber-400/60 bg-[#0d1924] sm:h-8 sm:w-8">
               <Shield className="h-3.5 w-3.5 -rotate-45 text-amber-400" />
             </div>
-            <div>
-              <h1 className="font-display text-lg font-bold tracking-[0.16em] text-white sm:text-xl">
+            <div className="min-w-0">
+              <h1 className="truncate font-display text-sm font-bold tracking-[0.14em] text-white sm:text-xl">
                 BANDUKWA ARENA
               </h1>
-              <p className="font-mono text-[10px] tracking-[0.14em] text-[#94a3b8]">
+              <p className="truncate font-mono text-[9px] tracking-[0.12em] text-[#94a3b8] sm:text-[10px]">
                 {mapReady && weaponsReady ? 'ARENA READY · 4-PLAYER SQUAD' : 'LOADING 3D ASSETS…'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 sm:gap-2">
             <button
               type="button"
               onClick={onToggleFullscreen}
               title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-              className="flex min-h-[40px] items-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-3 py-2 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0"
+              className="flex min-h-[38px] min-w-[38px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-2.5 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0 sm:px-3"
             >
               {isFullscreen ? (
                 <Minimize2 className="h-3.5 w-3.5 text-amber-400" />
@@ -236,7 +236,7 @@ export function LobbyModal({
               type="button"
               onClick={onOpenSettings}
               title="Settings"
-              className="flex min-h-[40px] items-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-3 py-2 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0"
+              className="flex min-h-[38px] min-w-[38px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-2.5 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0 sm:px-3"
             >
               <Settings className="h-3.5 w-3.5 text-amber-400" />
               <span className="hidden sm:inline">Settings</span>
@@ -244,22 +244,22 @@ export function LobbyModal({
           </div>
         </header>
 
-        {/* Center Identity + 4 Low-Poly Banner Picker */}
-        <main className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col items-center justify-center px-4 py-5 sm:px-6">
-          <div className="mb-5 text-center">
-            <h2 className="font-display text-2xl font-bold tracking-[0.14em] text-white sm:text-3xl">
+        {/* Scrollable Center Content: Username Input + 4 Low-Poly Banner Picker */}
+        <main className="mx-auto flex w-full max-w-[1120px] flex-1 flex-col items-center justify-start overflow-y-auto px-3 py-2.5 sm:justify-center sm:px-6 sm:py-5 [@media(max-height:520px)]:justify-center [@media(max-height:520px)]:py-1.5">
+          <div className="mb-2.5 text-center sm:mb-4 [@media(max-height:520px)]:mb-1.5">
+            <h2 className="font-display text-lg font-bold tracking-[0.12em] text-white sm:text-3xl [@media(max-height:520px)]:text-base">
               ENTER USERNAME &amp; CHOOSE BANNER
             </h2>
-            <p className="mt-1 text-xs text-[#94a3b8] sm:text-sm">
+            <p className="mt-0.5 text-[11px] text-[#94a3b8] sm:text-sm [@media(max-height:520px)]:hidden">
               Pick your low-poly operator card to deploy into Solo or 4-player Squad lobbies.
             </p>
           </div>
 
           {/* Username Input Row */}
-          <div className="mb-6 w-full max-w-[440px]">
+          <div className="mb-3 w-full max-w-[420px] sm:mb-5 [@media(max-height:520px)]:mb-2">
             <label
               htmlFor="operator-username-input"
-              className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] font-semibold tracking-[0.14em] text-[#cbd5e1]"
+              className="mb-1 hidden items-center gap-1.5 font-mono text-[11px] font-semibold tracking-[0.14em] text-[#cbd5e1] sm:flex [@media(max-height:520px)]:hidden"
             >
               <User className="h-3.5 w-3.5 text-amber-400" />
               USERNAME
@@ -267,7 +267,6 @@ export function LobbyModal({
             <input
               id="operator-username-input"
               type="text"
-              autoFocus
               maxLength={14}
               value={callsign}
               onChange={(e) => {
@@ -277,16 +276,16 @@ export function LobbyModal({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') submitProfile();
               }}
-              placeholder="Enter username (e.g. Ghost)"
-              className="min-h-[46px] w-full rounded-md border border-white/20 bg-[#070f17]/95 px-4 py-2.5 text-center text-base font-bold tracking-wide text-white outline-none placeholder:font-normal placeholder:text-[#64748b] focus:border-amber-400"
+              placeholder="Enter your username (e.g. Ghost)"
+              className="min-h-[42px] w-full rounded-md border border-white/20 bg-[#070f17]/95 px-3.5 py-2 text-center text-base font-bold tracking-wide text-white outline-none placeholder:text-sm placeholder:font-normal placeholder:text-[#64748b] focus:border-amber-400 sm:min-h-[46px]"
             />
             {nameError && (
-              <p className="mt-1.5 text-center font-mono text-xs text-red-400">{nameError}</p>
+              <p className="mt-1 text-center font-mono text-[11px] text-red-400">{nameError}</p>
             )}
           </div>
 
-          {/* 4 Low-Poly Character Banner Choices */}
-          <div className="grid w-full max-w-[1000px] grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4">
+          {/* 4 Low-Poly Character Banner Choices (2x2 on Portrait, 4-across on Landscape & Desktop) */}
+          <div className="grid w-full max-w-[1000px] grid-cols-2 gap-2.5 [@media(max-height:520px)]:grid-cols-4 [@media(max-height:520px)]:gap-2 sm:gap-4 lg:grid-cols-4">
             {OPERATOR_PRESETS.map((preset) => {
               const selected = preset.id === selectedPreset.id;
               return (
@@ -294,15 +293,15 @@ export function LobbyModal({
                   key={preset.id}
                   type="button"
                   onClick={() => onCardChange(preset.id)}
-                  className="group relative flex h-[220px] flex-col text-left transition-transform duration-150 focus:outline-none sm:h-[295px] lg:h-[330px]"
+                  className="group relative flex h-[146px] min-[400px]:h-[168px] flex-col text-left transition-transform duration-150 focus:outline-none [@media(max-height:520px)]:h-[144px] md:h-[260px] lg:h-[320px]"
                   style={{
-                    transform: selected ? 'translateY(-4px)' : undefined,
+                    transform: selected ? 'translateY(-3px)' : undefined,
                   }}
                 >
                   <div
                     className={`relative flex-1 overflow-hidden border transition-all ${
                       selected
-                        ? 'border-amber-400 shadow-[0_0_30px_rgba(245,158,11,0.28)]'
+                        ? 'border-amber-400 shadow-[0_0_26px_rgba(245,158,11,0.28)]'
                         : 'border-white/18 opacity-85 hover:border-cyan-400/60 hover:opacity-100'
                     } bg-gradient-to-b ${preset.bgGradient}`}
                     style={{
@@ -318,14 +317,14 @@ export function LobbyModal({
                     <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050a0f] via-[#050a0f]/25 to-transparent" />
 
                     {selected && (
-                      <div className="absolute right-2.5 top-2.5 flex h-6 w-6 items-center justify-center rounded-sm bg-amber-400 text-slate-950 shadow">
-                        <Check className="h-4 w-4 stroke-[3]" />
+                      <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-sm bg-amber-400 text-slate-950 shadow sm:h-6 sm:w-6">
+                        <Check className="h-3.5 w-3.5 stroke-[3] sm:h-4 sm:w-4" />
                       </div>
                     )}
 
-                    <div className="absolute inset-x-0 bottom-7 flex flex-col items-center px-2.5 text-center sm:bottom-10">
+                    <div className="absolute inset-x-0 bottom-5 flex flex-col items-center px-1.5 text-center sm:bottom-9 [@media(max-height:520px)]:bottom-4">
                       <div
-                        className={`w-full max-w-[92%] truncate px-2.5 py-1 text-xs font-extrabold tracking-widest shadow sm:text-sm ${
+                        className={`w-full max-w-[92%] truncate px-2 py-0.5 text-[11px] font-extrabold tracking-widest shadow sm:py-1 sm:text-sm ${
                           selected
                             ? 'bg-[#eef2f6] text-[#090d14]'
                             : 'border border-white/20 bg-[#0b1622]/90 text-white'
@@ -333,20 +332,20 @@ export function LobbyModal({
                       >
                         {preset.title}
                       </div>
-                      <div className="mt-1 font-mono text-[9px] font-semibold tracking-[0.14em] text-[#cbd5e1] sm:text-[10px]">
+                      <div className="mt-0.5 font-mono text-[8px] font-semibold tracking-[0.12em] text-[#cbd5e1] sm:mt-1 sm:text-[10px]">
                         {preset.specialty}
                       </div>
                     </div>
                   </div>
 
                   {/* Bottom Diamond Crest */}
-                  <div className="pointer-events-none -mt-3.5 flex justify-center">
+                  <div className="pointer-events-none -mt-2.5 flex justify-center sm:-mt-3">
                     <div
-                      className="flex h-6 w-6 rotate-45 items-center justify-center border border-white/30 bg-[#0d1926] shadow-md"
+                      className="flex h-4 w-4 rotate-45 items-center justify-center border border-white/30 bg-[#0d1926] shadow-md sm:h-6 sm:w-6"
                       style={{ borderColor: selected ? preset.accentHex : undefined }}
                     >
                       <span
-                        className="h-2.5 w-2.5"
+                        className="h-2 w-2 sm:h-2.5 sm:w-2.5"
                         style={{ backgroundColor: preset.accentHex }}
                       />
                     </div>
@@ -357,17 +356,17 @@ export function LobbyModal({
           </div>
         </main>
 
-        {/* Bottom CTA Footer */}
-        <footer className="mx-auto flex w-full max-w-[1280px] flex-col items-center justify-center gap-2 border-t border-white/10 px-4 py-4 sm:px-8">
+        {/* Pinned Bottom CTA Footer */}
+        <footer className="mx-auto flex w-full max-w-[1280px] shrink-0 flex-col items-center justify-center gap-1 border-t border-white/10 bg-[#060d15]/95 px-4 pt-2.5 pb-[max(0.65rem,env(safe-area-inset-bottom))] backdrop-blur-md sm:gap-2 sm:px-8 sm:py-3.5 [@media(max-height:520px)]:py-2">
           <button
             type="button"
             onClick={submitProfile}
-            className="flex min-h-[48px] min-w-[260px] items-center justify-center gap-2.5 rounded-sm border border-amber-300/60 bg-amber-500 px-8 py-3 font-display text-base font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap"
+            className="flex min-h-[44px] w-full max-w-[320px] items-center justify-center gap-2 rounded-sm border border-amber-300/60 bg-amber-500 px-6 py-2.5 font-display text-sm font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap sm:min-h-[48px] sm:w-auto sm:min-w-[260px] sm:text-base"
           >
             <Play className="h-4 w-4 fill-current" />
             CONTINUE TO LOBBY
           </button>
-          <span className="font-mono text-[11px] text-[#94a3b8]">
+          <span className="font-mono text-[10px] text-[#94a3b8] sm:text-[11px] [@media(max-height:520px)]:hidden">
             Playing as <span className="font-semibold text-white">{callsign.trim() || '—'}</span> ·{' '}
             <span className="text-amber-300">{selectedPreset.title}</span>
           </span>
@@ -485,33 +484,33 @@ export function LobbyModal({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex flex-col justify-between overflow-y-auto bg-gradient-to-b from-[#07111a]/88 via-[#091823]/84 to-[#050b11]/92 text-[#eef2f6] backdrop-blur-[3px]"
+      className="fixed inset-0 z-40 flex h-[100dvh] flex-col overflow-hidden bg-gradient-to-b from-[#07111a]/88 via-[#091823]/84 to-[#050b11]/92 text-[#eef2f6] backdrop-blur-[3px]"
       role="dialog"
       aria-label="Squad Match Lobby"
     >
       {/* Top 3-Zone Header Bar (Mode & Tabs — Queue / Code Diamond — Profile & Settings) */}
-      <header className="relative mx-auto flex w-full max-w-[1380px] flex-wrap items-center justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-8 sm:py-4">
+      <header className="relative mx-auto flex w-full max-w-[1380px] shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2 sm:gap-3 sm:px-8 sm:py-3.5 [@media(max-height:520px)]:py-1.5">
         {/* Zone 1: Mode Title & Mode Selector */}
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2">
             {roomCode && (
               <button
                 type="button"
                 disabled={busy}
                 onClick={handleLeave}
                 title="Leave Squad"
-                className="flex h-9 w-9 items-center justify-center rounded-md border border-white/15 bg-white/5 text-[#cbd5e1] transition-colors hover:border-red-400/60 hover:bg-red-950/40 hover:text-white"
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-white/15 bg-white/5 text-[#cbd5e1] transition-colors hover:border-red-400/60 hover:bg-red-950/40 hover:text-white sm:h-9 sm:w-9"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
             )}
-            <h1 className="font-display text-xl font-bold tracking-[0.14em] text-white whitespace-nowrap shrink-0 sm:text-2xl">
+            <h1 className="font-display text-sm font-bold tracking-[0.12em] text-white whitespace-nowrap shrink-0 sm:text-xl">
               {modeHeadline}
             </h1>
           </div>
 
           {!roomCode && (
-            <div className="flex items-center gap-1 rounded-md border border-white/12 bg-[#070d14]/90 p-1">
+            <div className="flex items-center gap-1 rounded-md border border-white/12 bg-[#070d14]/90 p-0.5 sm:p-1">
               {(
                 [
                   ['solo', 'Solo'],
@@ -526,7 +525,7 @@ export function LobbyModal({
                     setLocalError('');
                     setTab(id);
                   }}
-                  className={`min-h-[34px] rounded px-3 py-1 text-xs font-semibold tracking-wide transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[32px] rounded px-2.5 py-1 text-[11px] font-semibold tracking-wide transition-colors whitespace-nowrap shrink-0 sm:min-h-[34px] sm:px-3 sm:text-xs ${
                     tab === id
                       ? 'bg-amber-500 text-slate-950'
                       : 'text-[#94a3b8] hover:text-white'
@@ -540,15 +539,15 @@ export function LobbyModal({
         </div>
 
         {/* Zone 2: Center Match Status / Room Code & Timer */}
-        <div className="order-3 flex w-full items-center justify-center sm:order-2 sm:w-auto">
+        <div className="order-3 flex w-full items-center justify-center sm:order-2 sm:w-auto [@media(max-height:520px)]:order-2 [@media(max-height:520px)]:w-auto">
           {roomCode ? (
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 rotate-45 items-center justify-center border border-amber-400/60 bg-[#0d1924]">
+            <div className="flex items-center gap-2.5 rounded-md border border-amber-500/30 bg-[#08121c]/80 px-3 py-1 sm:border-none sm:bg-transparent sm:p-0">
+              <div className="hidden h-8 w-8 rotate-45 items-center justify-center border border-amber-400/60 bg-[#0d1924] sm:flex">
                 <Users className="h-4 w-4 -rotate-45 text-amber-400" />
               </div>
               <div className="text-left">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-2xl font-bold tracking-[0.22em] tabular-nums text-white leading-none">
+                  <span className="font-mono text-lg font-bold tracking-[0.2em] tabular-nums text-white leading-none sm:text-2xl">
                     {roomCode}
                   </span>
                   <button
@@ -563,8 +562,12 @@ export function LobbyModal({
                       <Copy className="h-3.5 w-3.5" />
                     )}
                   </button>
+                  <span className="font-mono text-[10px] tabular-nums text-[#94a3b8] sm:hidden">
+                    {connectedTotal}/{maxPlayers}
+                    {pingMs !== null ? ` · ${pingMs}ms` : ''}
+                  </span>
                 </div>
-                <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] tabular-nums text-[#94a3b8]">
+                <div className="mt-0.5 hidden items-center gap-2 font-mono text-[11px] tabular-nums text-[#94a3b8] sm:flex">
                   <span>{formatElapsed(waitSeconds)}</span>
                   <span aria-hidden="true">·</span>
                   <span className={allReady ? 'text-emerald-400' : 'text-amber-300'}>
@@ -582,15 +585,15 @@ export function LobbyModal({
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 rotate-45 items-center justify-center border border-white/25 bg-[#0c1620]">
+            <div className="hidden items-center gap-2.5 md:flex">
+              <div className="flex h-7 w-7 rotate-45 items-center justify-center border border-white/25 bg-[#0c1620]">
                 <Shield className="h-3.5 w-3.5 -rotate-45 text-amber-400" />
               </div>
               <div className="text-left">
-                <div className="font-display text-sm font-bold tracking-[0.14em] text-white">
+                <div className="font-display text-xs font-bold tracking-[0.14em] text-white sm:text-sm">
                   DESERT COMPOUND
                 </div>
-                <div className="font-mono text-[11px] text-[#94a3b8]">
+                <div className="font-mono text-[10px] text-[#94a3b8]">
                   {mapReady && weaponsReady ? 'ARENA READY · 7 WEAPONS' : 'LOADING 3D ASSETS…'}
                 </div>
               </div>
@@ -599,25 +602,25 @@ export function LobbyModal({
         </div>
 
         {/* Zone 3: Player Profile Chip + Fullscreen + Settings */}
-        <div className="order-2 flex items-center gap-2 shrink-0 sm:order-3">
+        <div className="order-2 flex items-center gap-1.5 shrink-0 sm:order-3 sm:gap-2">
           <button
             type="button"
             onClick={onEditProfile}
             title="Change username or low-poly banner"
-            className="flex items-center gap-2 rounded-md border border-white/15 bg-[#0b1520]/90 p-1 pr-2.5 text-left transition-colors hover:border-amber-400/60"
+            className="flex items-center gap-1.5 rounded-md border border-white/15 bg-[#0b1520]/90 p-1 pr-2 text-left transition-colors hover:border-amber-400/60 sm:gap-2 sm:pr-2.5"
           >
             <img
               src={myPreset.image}
               alt={myPreset.title}
               referrerPolicy="no-referrer"
-              className="h-8 w-8 rounded-sm object-cover object-top"
+              className="h-7 w-7 rounded-sm object-cover object-top sm:h-8 sm:w-8"
             />
             <div>
-              <div className="max-w-[105px] truncate text-xs font-bold text-white leading-tight">
+              <div className="max-w-[72px] truncate text-[11px] font-bold text-white leading-tight sm:max-w-[105px] sm:text-xs">
                 {callsign.trim() || 'Operator'}
               </div>
-              <div className="font-mono text-[10px] text-amber-300 leading-tight">
-                {myPreset.title} · Edit
+              <div className="font-mono text-[9px] text-amber-300 leading-tight sm:text-[10px]">
+                {myPreset.title}
               </div>
             </div>
           </button>
@@ -626,7 +629,7 @@ export function LobbyModal({
             type="button"
             onClick={onToggleFullscreen}
             title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
-            className="flex min-h-[40px] items-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-3 py-2 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0"
+            className="flex min-h-[36px] min-w-[36px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-2 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0 sm:min-h-[40px] sm:px-3"
           >
             {isFullscreen ? (
               <Minimize2 className="h-3.5 w-3.5 text-amber-400" />
@@ -640,7 +643,7 @@ export function LobbyModal({
             type="button"
             onClick={onOpenSettings}
             title="Settings"
-            className="flex min-h-[40px] items-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-3 py-2 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0"
+            className="flex min-h-[36px] min-w-[36px] items-center justify-center gap-1.5 rounded-md border border-white/15 bg-[#0d1722] px-2 py-1.5 text-xs font-semibold text-[#e2e8f0] transition-colors hover:border-amber-500/60 hover:text-white whitespace-nowrap shrink-0 sm:min-h-[40px] sm:px-3"
           >
             <Settings className="h-3.5 w-3.5 text-amber-400" />
             <span className="hidden sm:inline">Settings</span>
@@ -649,10 +652,10 @@ export function LobbyModal({
       </header>
 
       {/* Center Stage: 4 Vertical Operator Banner Cards (matching Valorant Squad Screen) */}
-      <main className="mx-auto flex w-full max-w-[1160px] flex-1 flex-col items-center justify-center px-4 py-4 sm:px-6 sm:py-6">
-        {/* Callsign + Room Setup Strip when NOT yet in a P2P room and on Host / Join tabs */}
+      <main className="mx-auto flex w-full max-w-[1160px] flex-1 flex-col items-center justify-start overflow-y-auto px-3 py-2.5 sm:justify-center sm:px-6 sm:py-5 [@media(max-height:520px)]:justify-center [@media(max-height:520px)]:py-1.5">
+        {/* Callsign + Room Setup Strip when NOT yet in a P2P room and on Join tab */}
         {!roomCode && tab === 'join' && (
-          <div className="mb-5 flex w-full max-w-[540px] flex-col gap-2.5 rounded-lg border border-amber-500/35 bg-[#0a131d]/92 p-3.5 sm:flex-row sm:items-center">
+          <div className="mb-3 flex w-full max-w-[540px] flex-row items-center gap-2 rounded-lg border border-amber-500/35 bg-[#0a131d]/92 p-2.5 sm:mb-5 sm:p-3.5 [@media(max-height:520px)]:mb-2">
             <input
               ref={joinInputRef}
               type="text"
@@ -665,23 +668,23 @@ export function LobbyModal({
                   void handleJoinLobby();
                 }
               }}
-              placeholder="Enter 5-digit Host Code"
-              className="min-h-[44px] flex-1 rounded-md border border-white/15 bg-[#060c12] px-4 py-2 text-center font-mono text-xl font-bold tracking-[0.26em] tabular-nums text-white outline-none placeholder:text-xs placeholder:font-normal placeholder:tracking-normal placeholder:text-[#64748b] focus:border-amber-400"
+              placeholder="5-digit Host Code"
+              className="min-h-[42px] min-w-0 flex-1 rounded-md border border-white/15 bg-[#060c12] px-3 py-2 text-center font-mono text-base font-bold tracking-[0.2em] tabular-nums text-white outline-none placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-[#64748b] focus:border-amber-400 sm:min-h-[44px] sm:text-xl sm:tracking-[0.26em]"
             />
             <button
               type="button"
               disabled={busy || joinCodeInput.length !== 5}
               onClick={handleJoinLobby}
-              className="flex min-h-[44px] items-center justify-center gap-2 rounded-md bg-amber-500 px-6 py-2 text-xs font-bold tracking-wider text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-45 whitespace-nowrap"
+              className="flex min-h-[42px] shrink-0 items-center justify-center gap-1.5 rounded-md bg-amber-500 px-4 py-2 text-xs font-bold tracking-wider text-slate-950 transition-colors hover:bg-amber-400 disabled:opacity-45 whitespace-nowrap sm:min-h-[44px] sm:px-6"
             >
               <Users className="h-4 w-4" />
-              {busy ? 'CONNECTING…' : 'JOIN LOBBY'}
+              {busy ? 'CONNECTING…' : 'JOIN'}
             </button>
           </div>
         )}
 
-        {/* 4 Squad Cards Grid */}
-        <div className="grid w-full max-w-[1040px] grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4">
+        {/* 4 Squad Cards Grid (2x2 on Portrait, 4-across on Landscape Mobile & Desktop) */}
+        <div className="grid w-full max-w-[1040px] grid-cols-2 gap-2.5 [@media(max-height:520px)]:grid-cols-4 [@media(max-height:520px)]:gap-2 sm:gap-5 lg:grid-cols-4">
           {slots.map((member, slotIdx) => {
             if (!member) {
               const emptyAction = () => {
@@ -710,7 +713,7 @@ export function LobbyModal({
                   key={`empty-${slotIdx}`}
                   type="button"
                   onClick={emptyAction}
-                  className="group relative flex h-[230px] flex-col items-center justify-center overflow-hidden rounded-sm border border-white/12 bg-gradient-to-b from-[#0f1d2a]/55 via-[#0a141e]/45 to-transparent p-4 transition-all hover:border-cyan-400/50 hover:bg-[#112333]/60 sm:h-[310px] lg:h-[350px]"
+                  className="group relative flex h-[148px] min-[400px]:h-[172px] flex-col items-center justify-center overflow-hidden rounded-sm border border-white/12 bg-gradient-to-b from-[#0f1d2a]/55 via-[#0a141e]/45 to-transparent p-3 transition-all hover:border-cyan-400/50 hover:bg-[#112333]/60 [@media(max-height:520px)]:h-[150px] md:h-[265px] lg:h-[335px]"
                   style={{
                     clipPath: 'polygon(0 0, 100% 0, 100% 89%, 50% 100%, 0 89%)',
                   }}
@@ -723,10 +726,10 @@ export function LobbyModal({
                       backgroundSize: '14px 14px',
                     }}
                   />
-                  <div className="relative flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-white/5 text-[#cbd5e1] transition-transform group-hover:scale-110 group-hover:border-cyan-400/70 group-hover:text-white">
-                    <Plus className="h-5 w-5" />
+                  <div className="relative flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-white/5 text-[#cbd5e1] transition-transform group-hover:scale-110 group-hover:border-cyan-400/70 group-hover:text-white sm:h-12 sm:w-12">
+                    <Plus className="h-4 w-4 sm:h-5 sm:w-5" />
                   </div>
-                  <span className="relative mt-3 font-mono text-[10px] font-semibold tracking-[0.16em] text-[#94a3b8] group-hover:text-cyan-300">
+                  <span className="relative mt-2 font-mono text-[9px] font-semibold tracking-[0.14em] text-[#94a3b8] group-hover:text-cyan-300 sm:mt-3 sm:text-[10px]">
                     {emptyLabel}
                   </span>
                 </button>
@@ -752,7 +755,7 @@ export function LobbyModal({
             return (
               <div
                 key={`slot-${slotIdx}-${member.id}`}
-                className="group relative flex h-[230px] flex-col justify-between sm:h-[310px] lg:h-[350px]"
+                className="group relative flex h-[148px] min-[400px]:h-[172px] flex-col justify-between [@media(max-height:520px)]:h-[150px] md:h-[265px] lg:h-[335px]"
               >
                 {/* Top Cap Bar with Signal & Host/Ping */}
                 <div className="mb-1 flex items-center justify-between px-1 font-mono text-[10px] tabular-nums text-[#cbd5e1]">
@@ -845,13 +848,13 @@ export function LobbyModal({
                   )}
 
                   {/* Lower Ready Badge + Nameplate + Specialty */}
-                  <div className="absolute inset-x-0 bottom-8 flex flex-col items-center px-2.5 text-center sm:bottom-11">
-                    <div className={`mb-1 font-mono text-[10px] font-bold tracking-[0.2em] ${statusColor}`}>
+                  <div className="absolute inset-x-0 bottom-4 flex flex-col items-center px-1.5 text-center sm:bottom-9 [@media(max-height:520px)]:bottom-4">
+                    <div className={`mb-0.5 font-mono text-[9px] font-bold tracking-[0.16em] sm:mb-1 sm:text-[10px] ${statusColor}`}>
                       {statusText}
                     </div>
 
                     <div
-                      className={`w-full max-w-[92%] truncate px-2.5 py-1 text-xs font-extrabold tracking-wide shadow sm:text-sm ${
+                      className={`w-full max-w-[92%] truncate px-2 py-0.5 text-[11px] font-extrabold tracking-wide shadow sm:py-1 sm:text-sm ${
                         member.isMe
                           ? 'bg-[#eef2f6] text-[#090d14]'
                           : 'border border-white/20 bg-[#0b1622]/92 text-white'
@@ -860,20 +863,20 @@ export function LobbyModal({
                       {member.name}
                     </div>
 
-                    <div className="mt-1 font-mono text-[9px] font-semibold tracking-[0.16em] text-[#cbd5e1] sm:text-[10px]">
+                    <div className="mt-0.5 font-mono text-[8px] font-semibold tracking-[0.12em] text-[#cbd5e1] sm:mt-1 sm:text-[10px]">
                       {preset.specialty}
                     </div>
                   </div>
                 </div>
 
                 {/* Bottom Crest Diamond */}
-                <div className="pointer-events-none -mt-3.5 flex justify-center">
+                <div className="pointer-events-none -mt-2.5 flex justify-center sm:-mt-3">
                   <div
-                    className="flex h-6 w-6 rotate-45 items-center justify-center border border-white/30 bg-[#0d1926] shadow-md"
+                    className="flex h-4 w-4 rotate-45 items-center justify-center border border-white/30 bg-[#0d1926] shadow-md sm:h-6 sm:w-6"
                     style={{ borderColor: member.ready ? preset.accentHex : undefined }}
                   >
                     <span
-                      className="h-2.5 w-2.5"
+                      className="h-2 w-2 sm:h-2.5 sm:w-2.5"
                       style={{ backgroundColor: preset.accentHex }}
                     />
                   </div>
@@ -885,7 +888,7 @@ export function LobbyModal({
 
         {(localError || p2pStatus) && (
           <div
-            className={`mt-4 text-center font-mono text-xs ${
+            className={`mt-2.5 text-center font-mono text-[11px] sm:mt-4 sm:text-xs ${
               localError ? 'text-red-400' : 'text-amber-300'
             }`}
           >
@@ -894,14 +897,14 @@ export function LobbyModal({
         )}
       </main>
 
-      {/* Bottom Bar: Squad Chat (Left) — Primary PLAY / READY CTA (Center) — Room/Controls (Right) */}
-      <footer className="mx-auto grid w-full max-w-[1380px] grid-cols-1 items-end gap-4 border-t border-white/10 px-4 py-3 sm:px-8 sm:py-4 lg:grid-cols-3">
-        {/* Bottom-Left: Real Interactive Squad Chat & Branding */}
-        <div className="order-2 flex flex-col gap-2 lg:order-1">
+      {/* Pinned Bottom Bar: Squad Chat (Left) — Primary PLAY / READY CTA (Center) — Leave/Controls (Right) */}
+      <footer className="mx-auto grid w-full max-w-[1380px] shrink-0 grid-cols-1 items-end gap-2 border-t border-white/10 bg-[#060d15]/95 px-3 pt-2 pb-[max(0.65rem,env(safe-area-inset-bottom))] backdrop-blur-md sm:gap-3 sm:px-8 sm:py-3.5 lg:grid-cols-3 [@media(max-height:520px)]:py-1.5">
+        {/* Bottom-Left: Real Interactive Squad Chat (compact on mobile) */}
+        <div className="order-2 flex flex-col gap-1.5 lg:order-1">
           {roomCode && chatMessages.length > 0 && (
             <div
               ref={chatScrollRef}
-              className="max-h-20 space-y-0.5 overflow-y-auto rounded border border-white/10 bg-[#060d14]/75 px-2.5 py-1.5 text-[11px]"
+              className="max-h-14 space-y-0.5 overflow-y-auto rounded border border-white/10 bg-[#060d14]/75 px-2 py-1 text-[11px] sm:max-h-20"
             >
               {chatMessages.map((c) => (
                 <div key={c.id} className="leading-snug">
@@ -914,12 +917,9 @@ export function LobbyModal({
             </div>
           )}
 
-          <div className="flex items-center gap-2">
-            <span className="font-display text-sm font-bold tracking-[0.16em] text-amber-400 whitespace-nowrap">
-              BANDUKWA ARENA
-            </span>
-            {roomCode ? (
-              <div className="flex flex-1 items-center rounded border border-white/15 bg-[#070f17]/90 px-2 py-1">
+          {roomCode ? (
+            <div className="flex items-center gap-2">
+              <div className="flex flex-1 items-center rounded border border-white/15 bg-[#070f17]/90 px-2.5 py-1">
                 <input
                   type="text"
                   maxLength={90}
@@ -928,83 +928,127 @@ export function LobbyModal({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') submitChat();
                   }}
-                  placeholder="Type message to squad…"
-                  className="w-full bg-transparent text-xs text-white placeholder:text-[#64748b] outline-none"
+                  placeholder="Squad chat…"
+                  className="w-full bg-transparent text-base text-white placeholder:text-xs placeholder:text-[#64748b] outline-none sm:text-xs"
                 />
                 <button
                   type="button"
                   onClick={submitChat}
                   title="Send message"
-                  className="ml-1 text-[#94a3b8] hover:text-amber-400"
+                  className="ml-1 p-1 text-[#94a3b8] hover:text-amber-400"
                 >
                   <Send className="h-3.5 w-3.5" />
                 </button>
               </div>
-            ) : (
-              <span className="hidden text-xs text-[#64748b] sm:inline">
-                · Tactical 3D Desert Compound
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Bottom-Center: Primary Valorant-style START / READY / CREATE SQUAD CTA */}
-        <div className="order-1 flex flex-col items-center gap-2 lg:order-2">
-          {!roomCode ? (
-            tab === 'host' ? (
               <button
                 type="button"
                 disabled={busy}
-                onClick={handleHostLobby}
-                className="flex min-h-[48px] min-w-[230px] items-center justify-center gap-2.5 rounded-sm border border-amber-300/60 bg-amber-500 px-8 py-3 font-display text-base font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] disabled:opacity-50 whitespace-nowrap"
+                onClick={handleLeave}
+                className="flex min-h-[34px] items-center gap-1 rounded border border-red-500/35 bg-red-950/35 px-2.5 py-1 text-xs font-semibold text-red-200 transition-colors hover:bg-red-950/60 whitespace-nowrap shrink-0 lg:hidden"
               >
-                <Users className="h-4 w-4" />
-                {busy ? 'CREATING SQUAD…' : 'CREATE SQUAD ROOM'}
+                <LogOut className="h-3.5 w-3.5" />
+                Leave
               </button>
+            </div>
+          ) : (
+            <div className="hidden items-center gap-2 lg:flex">
+              <span className="font-display text-sm font-bold tracking-[0.16em] text-amber-400 whitespace-nowrap">
+                BANDUKWA ARENA
+              </span>
+              <span className="text-xs text-[#64748b]">· Tactical 3D Desert Compound</span>
+            </div>
+          )}
+        </div>
+
+        {/* Bottom-Center: Primary Valorant-style START / READY / CREATE SQUAD CTA */}
+        <div className="order-1 flex flex-col items-center gap-1.5 lg:order-2">
+          {!roomCode ? (
+            tab === 'host' ? (
+              <div className="flex w-full max-w-[340px] items-center justify-center gap-2 sm:w-auto">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handleHostLobby}
+                  className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-sm border border-amber-300/60 bg-amber-500 px-6 py-2.5 font-display text-sm font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] disabled:opacity-60 whitespace-nowrap sm:min-h-[48px] sm:min-w-[230px] sm:text-base"
+                >
+                  <Users className="h-4 w-4" />
+                  {busy ? 'CREATING SQUAD…' : 'CREATE SQUAD ROOM'}
+                </button>
+                {busy && (
+                  <button
+                    type="button"
+                    onClick={() => void handleLeave()}
+                    className="min-h-[44px] rounded-sm border border-white/20 bg-white/10 px-3.5 text-xs font-bold text-white hover:bg-white/20 sm:min-h-[48px]"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             ) : tab === 'join' ? (
-              <button
-                type="button"
-                disabled={busy || joinCodeInput.length !== 5}
-                onClick={handleJoinLobby}
-                className="flex min-h-[48px] min-w-[230px] items-center justify-center gap-2.5 rounded-sm border border-cyan-300/50 bg-cyan-500 px-8 py-3 font-display text-base font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-cyan-400 active:scale-[0.98] disabled:opacity-45 whitespace-nowrap"
-              >
-                <Users className="h-4 w-4" />
-                {busy ? 'JOINING SQUAD…' : 'ENTER SQUAD CODE'}
-              </button>
+              <div className="flex w-full max-w-[340px] items-center justify-center gap-2 sm:w-auto">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (joinCodeInput.length === 5) {
+                      void handleJoinLobby();
+                    } else {
+                      joinInputRef.current?.focus();
+                    }
+                  }}
+                  className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-sm border border-cyan-300/50 bg-cyan-500 px-6 py-2.5 font-display text-sm font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-cyan-400 active:scale-[0.98] disabled:opacity-60 whitespace-nowrap sm:min-h-[48px] sm:min-w-[230px] sm:text-base"
+                >
+                  <Users className="h-4 w-4" />
+                  {busy
+                    ? 'JOINING SQUAD…'
+                    : joinCodeInput.length === 5
+                      ? `JOIN ROOM ${joinCodeInput}`
+                      : 'ENTER 5-DIGIT CODE ABOVE'}
+                </button>
+                {busy && (
+                  <button
+                    type="button"
+                    onClick={() => void handleLeave()}
+                    className="min-h-[44px] rounded-sm border border-white/20 bg-white/10 px-3.5 text-xs font-bold text-white hover:bg-white/20 sm:min-h-[48px]"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             ) : (
               <button
                 type="button"
                 onClick={onStartMatch}
-                className="flex min-h-[48px] min-w-[230px] items-center justify-center gap-2.5 rounded-sm border border-amber-300/60 bg-amber-500 px-8 py-3 font-display text-base font-bold tracking-[0.18em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap"
+                className="flex min-h-[44px] w-full max-w-[340px] items-center justify-center gap-2 rounded-sm border border-amber-300/60 bg-amber-500 px-6 py-2.5 font-display text-sm font-bold tracking-[0.18em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap sm:min-h-[48px] sm:w-auto sm:min-w-[230px] sm:text-base"
               >
                 <Play className="h-4 w-4 fill-current" />
                 {started ? 'RESUME MATCH' : 'START'}
               </button>
             )
           ) : isHostRoom ? (
-            <div className="flex flex-col items-center gap-1.5">
-              <div className="font-mono text-[11px] tracking-wider text-[#94a3b8]">
+            <div className="flex w-full flex-col items-center gap-1">
+              <div className="font-mono text-[10px] tracking-wider text-[#94a3b8] sm:text-[11px] [@media(max-height:520px)]:hidden">
                 {connectedTotal < 2
-                  ? `SHARE CODE ${roomCode} · WAITING FOR PLAYERS (${connectedTotal}/${maxPlayers})`
+                  ? `SHARE CODE ${roomCode} · WAITING (${connectedTotal}/${maxPlayers})`
                   : `${readyCount}/${connectedTotal} READY IN LOBBY`}
               </div>
-              <div className="flex items-center gap-2.5">
+              <div className="flex w-full max-w-[380px] items-center gap-2 sm:w-auto">
                 <button
                   type="button"
                   onClick={onToggleReady}
-                  className={`flex min-h-[46px] items-center justify-center gap-1.5 rounded-sm border px-5 py-2.5 font-display text-sm font-bold tracking-wider transition-colors whitespace-nowrap ${
+                  className={`flex min-h-[42px] items-center justify-center gap-1.5 rounded-sm border px-3.5 py-2 font-display text-xs font-bold tracking-wider transition-colors whitespace-nowrap sm:min-h-[46px] sm:px-5 sm:text-sm ${
                     ready
                       ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-300'
                       : 'border-white/20 bg-white/5 text-[#cbd5e1] hover:border-white/40'
                   }`}
                 >
-                  <Check className="h-4 w-4" />
+                  <Check className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   {ready ? 'READY' : 'STAND BY'}
                 </button>
                 <button
                   type="button"
                   onClick={onLaunchSquadMatch}
-                  className="flex min-h-[46px] min-w-[200px] items-center justify-center gap-2.5 rounded-sm border border-amber-300/60 bg-amber-500 px-8 py-2.5 font-display text-base font-bold tracking-[0.18em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap"
+                  className="flex min-h-[42px] flex-1 items-center justify-center gap-2 rounded-sm border border-amber-300/60 bg-amber-500 px-5 py-2 font-display text-sm font-bold tracking-[0.16em] text-slate-950 shadow-lg transition-transform hover:bg-amber-400 active:scale-[0.98] whitespace-nowrap sm:min-h-[46px] sm:min-w-[200px] sm:px-8 sm:text-base"
                 >
                   <Play className="h-4 w-4 fill-current" />
                   {started ? 'RESUME MATCH' : 'PLAY MATCH'}
@@ -1012,19 +1056,19 @@ export function LobbyModal({
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-1.5">
-              <div className="font-mono text-[11px] tracking-wider text-[#94a3b8]">
+            <div className="flex w-full flex-col items-center gap-1">
+              <div className="font-mono text-[10px] tracking-wider text-[#94a3b8] sm:text-[11px] [@media(max-height:520px)]:hidden">
                 {hostAlreadyInGame
-                  ? 'HOST ALREADY IN ARENA · CLICK DEPLOY TO JOIN'
+                  ? 'HOST IN ARENA · TAP DEPLOY TO JOIN'
                   : ready
                     ? 'WAITING FOR HOST TO CLICK PLAY MATCH…'
-                    : 'TOGGLE READY WHEN PREPARED'}
+                    : 'TAP READY UP WHEN PREPARED'}
               </div>
-              <div className="flex items-center gap-2.5">
+              <div className="flex w-full max-w-[380px] items-center gap-2 sm:w-auto">
                 <button
                   type="button"
                   onClick={onToggleReady}
-                  className={`flex min-h-[46px] min-w-[160px] items-center justify-center gap-2 rounded-sm border px-6 py-2.5 font-display text-sm font-bold tracking-[0.14em] transition-colors whitespace-nowrap ${
+                  className={`flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-sm border px-4 py-2 font-display text-xs font-bold tracking-[0.14em] transition-colors whitespace-nowrap sm:min-h-[46px] sm:min-w-[160px] sm:px-6 sm:text-sm ${
                     ready
                       ? 'border-emerald-400 bg-emerald-500 text-slate-950'
                       : 'border-cyan-400/60 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25'
@@ -1038,7 +1082,7 @@ export function LobbyModal({
                   <button
                     type="button"
                     onClick={onStartMatch}
-                    className="flex min-h-[46px] items-center justify-center gap-2 rounded-sm border border-amber-300/60 bg-amber-500 px-6 py-2.5 font-display text-sm font-bold tracking-[0.16em] text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap"
+                    className="flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-sm border border-amber-300/60 bg-amber-500 px-4 py-2 font-display text-xs font-bold tracking-[0.16em] text-slate-950 transition-colors hover:bg-amber-400 whitespace-nowrap sm:min-h-[46px] sm:px-6 sm:text-sm"
                   >
                     <Play className="h-4 w-4 fill-current" />
                     {started ? 'RESUME' : 'DEPLOY NOW'}
@@ -1049,8 +1093,8 @@ export function LobbyModal({
           )}
         </div>
 
-        {/* Bottom-Right: Controls Summary or Leave Room */}
-        <div className="order-3 flex items-center justify-between gap-3 text-[11px] text-[#64748b] lg:justify-end">
+        {/* Bottom-Right: Desktop Controls Summary & Leave Room */}
+        <div className="order-3 hidden items-center justify-end gap-3 text-[11px] text-[#64748b] lg:flex">
           <span className="truncate">
             WASD move · Shift sprint · Ctrl/C slide · R reload · G frag · 1–7 guns
           </span>

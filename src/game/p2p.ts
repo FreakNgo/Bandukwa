@@ -1,6 +1,8 @@
 import {
+  BROKER_DEFS,
   WssMqttClient,
-  generateRoomCodeForBroker,
+  WssRelayHub,
+  generateFiveDigitRoomCode,
 } from './wssRelay';
 
 export const MAX_ROOM_PLAYERS = 4;
@@ -61,6 +63,7 @@ interface PeerLink {
   dcOpen: boolean;
   relayActive: boolean;
   cid?: string;
+  brokerIdx?: number;
   lastSeen?: number;
 }
 
@@ -122,11 +125,15 @@ class ApiHttpError extends Error {
   }
 }
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function apiJson<T>(url: string, init?: RequestInit, timeoutMs = 4500): Promise<T> {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer =
+    controller !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let res: Response;
   try {
     res = await fetch(url, {
       ...init,
+      signal: controller?.signal,
       headers: {
         'Content-Type': 'application/json',
         ...(init?.headers ?? {}),
@@ -134,6 +141,8 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
     });
   } catch (err) {
     throw new ApiHttpError(0, false, err instanceof Error ? err.message : 'Network error');
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
 
   const contentType = res.headers.get('content-type') || '';
@@ -197,12 +206,14 @@ export class P2PManager {
 
   // Cloud WSS relay + WebRTC state
   private usingCloud = false;
+  private cloudHostHub: WssRelayHub | null = null;
   private cloudClient: WssMqttClient | null = null;
   private cloudClientId = '';
   private cloudCidToPeerId = new Map<string, number>();
   private cloudNextPeerId = 1;
   private cloudHeartbeatTimer: number | null = null;
   private joinPollCancelled = false;
+  private abortCloudJoin: (() => void) | null = null;
 
   onStatus?: (msg: string) => void;
   onPeerCountChange?: (count: number) => void;
@@ -396,7 +407,7 @@ export class P2PManager {
   }
 
   private publishCloudHostBroadcast(msg: P2PMessage, targetPeerIds: number[]): void {
-    if (!this.roomCode || !this.cloudClient?.isOpen) return;
+    if (!this.roomCode || !this.cloudHostHub?.isOpen) return;
     const isOwnState = msg.t === 's' && (msg.from === undefined || msg.from === 0);
     if (isOwnState) {
       const now = performance.now();
@@ -426,17 +437,25 @@ export class P2PManager {
     for (const pid of targetPeerIds) {
       const link = this.peers.get(pid);
       if (link?.cid) {
-        this.cloudClient.publish(`bandukwa/v2/${this.roomCode}/p/${link.cid}`, payload);
+        this.cloudHostHub.publish(
+          link.brokerIdx,
+          `bandukwa/v2/${this.roomCode}/p/${link.cid}`,
+          payload,
+        );
       }
     }
   }
 
   private publishCloudToPeer(targetId: number, msg: P2PMessage): void {
-    if (!this.roomCode || !this.cloudClient?.isOpen) return;
+    if (!this.roomCode || !this.cloudHostHub?.isOpen) return;
     const link = this.peers.get(targetId);
     if (!link?.cid) return;
     const payload = JSON.stringify({ k: 'msg', d: msg } satisfies CloudPeerPacket);
-    this.cloudClient.publish(`bandukwa/v2/${this.roomCode}/p/${link.cid}`, payload);
+    this.cloudHostHub.publish(
+      link.brokerIdx,
+      `bandukwa/v2/${this.roomCode}/p/${link.cid}`,
+      payload,
+    );
   }
 
   private postHttpRelay(msg: P2PMessage, to?: number): void {
@@ -511,7 +530,7 @@ export class P2PManager {
     } catch (err) {
       if (
         err instanceof ApiHttpError &&
-        (err.status === 405 || err.status === 0 || !err.hasJsonError)
+        (err.status === 405 || err.status === 0 || err.status === 404 || !err.hasJsonError)
       ) {
         return this.joinRoomViaCloud(code);
       }
@@ -892,9 +911,9 @@ export class P2PManager {
       this.peers.forEach((p, pid) => {
         if (p.dcOpen && dcSend(p.dc, JSON.stringify(byePkt))) {
           dcSend(p.dc, JSON.stringify({ t: 'rc', count: total }));
-        } else if (p.cid && this.cloudClient?.isOpen && this.roomCode) {
+        } else if (p.cid && this.cloudHostHub?.isOpen && this.roomCode) {
           this.publishCloudToPeer(pid, byePkt);
-          this.cloudClient.publish(`bandukwa/v2/${this.roomCode}/p/${p.cid}`, countPkt);
+          this.cloudHostHub.publish(p.brokerIdx, `bandukwa/v2/${this.roomCode}/p/${p.cid}`, countPkt);
         }
       });
     } else if (this.roomCode && this.peers.size > 0) {
@@ -1014,11 +1033,11 @@ export class P2PManager {
   }
 
   private async hostRoomViaCloud(): Promise<string> {
-    const { client, brokerIdx } = await WssMqttClient.connectAnyBroker();
-    const code = generateRoomCodeForBroker(brokerIdx);
+    const code = generateFiveDigitRoomCode();
     const hostTopic = `bandukwa/v2/${code}/host`;
+    const hub = new WssRelayHub();
 
-    this.cloudClient = client;
+    this.cloudHostHub = hub;
     this.usingCloud = true;
     this.isHost = true;
     this.myId = 0;
@@ -1027,15 +1046,14 @@ export class P2PManager {
     this.roomPlayerCount = 1;
     this.roomCode = code;
 
-    await client.subscribe(hostTopic);
-
-    client.onClose = () => {
-      if (this.roomCode === code && this.usingCloud) {
+    hub.onAllClosed = () => {
+      if (this.cloudHostHub === hub && this.roomCode === code && this.usingCloud) {
         this.emitStatus('Disconnected from multiplayer relay.');
       }
     };
 
-    client.onMessage = (_topic, rawPayload) => {
+    hub.onMessage = (brokerIdx, _topic, rawPayload) => {
+      if (this.cloudHostHub !== hub || this.roomCode !== code || !this.usingCloud) return;
       let pkt: CloudHostPacket;
       try {
         pkt = JSON.parse(rawPayload) as CloudHostPacket;
@@ -1045,7 +1063,7 @@ export class P2PManager {
       if (!pkt || typeof pkt !== 'object') return;
 
       if (pkt.k === 'join') {
-        this.handleCloudJoin(code, client, pkt.cid);
+        this.handleCloudJoin(code, hub, brokerIdx, pkt.cid);
         return;
       }
 
@@ -1079,10 +1097,20 @@ export class P2PManager {
         const link = this.peers.get(pid);
         if (link) {
           link.lastSeen = Date.now();
+          if (link.brokerIdx === undefined) link.brokerIdx = brokerIdx;
           this.routeHostMessage(pid, pkt.d);
         }
       }
     };
+
+    try {
+      await hub.startHost(hostTopic, 12000);
+    } catch (err) {
+      this.roomCode = null;
+      this.usingCloud = false;
+      this.cloudHostHub = null;
+      throw err;
+    }
 
     this.cloudHeartbeatTimer = window.setInterval(() => {
       if (!this.usingCloud || !this.isHost) return;
@@ -1103,20 +1131,27 @@ export class P2PManager {
     return code;
   }
 
-  private handleCloudJoin(code: string, client: WssMqttClient, cid: string): void {
+  private handleCloudJoin(code: string, hub: WssRelayHub, brokerIdx: number, cid: string): void {
     const existingId = this.cloudCidToPeerId.get(cid);
     const peerTopic = `bandukwa/v2/${code}/p/${cid}`;
 
     if (existingId !== undefined) {
       const link = this.peers.get(existingId);
-      if (link) link.lastSeen = Date.now();
+      if (link) {
+        link.lastSeen = Date.now();
+        link.brokerIdx = brokerIdx;
+      }
       const total = 1 + this.peers.size;
-      client.publish(peerTopic, JSON.stringify({ k: 'welcome', id: existingId, count: total } satisfies CloudPeerPacket));
+      hub.publish(
+        brokerIdx,
+        peerTopic,
+        JSON.stringify({ k: 'welcome', id: existingId, count: total } satisfies CloudPeerPacket),
+      );
       return;
     }
 
     if (this.peers.size >= MAX_ROOM_PLAYERS - 1) {
-      client.publish(peerTopic, JSON.stringify({ k: 'full' } satisfies CloudPeerPacket));
+      hub.publish(brokerIdx, peerTopic, JSON.stringify({ k: 'full' } satisfies CloudPeerPacket));
       return;
     }
 
@@ -1130,6 +1165,7 @@ export class P2PManager {
       dcOpen: false,
       relayActive: true,
       cid,
+      brokerIdx,
       lastSeen: Date.now(),
     };
     this.peers.set(peerId, link);
@@ -1137,7 +1173,11 @@ export class P2PManager {
     const total = 1 + this.peers.size;
     this.roomPlayerCount = total;
 
-    client.publish(peerTopic, JSON.stringify({ k: 'welcome', id: peerId, count: total } satisfies CloudPeerPacket));
+    hub.publish(
+      brokerIdx,
+      peerTopic,
+      JSON.stringify({ k: 'welcome', id: peerId, count: total } satisfies CloudPeerPacket),
+    );
 
     const countPkt = JSON.stringify({ k: 'rc', count: total } satisfies CloudPeerPacket);
     this.peers.forEach((other, pid) => {
@@ -1146,19 +1186,19 @@ export class P2PManager {
         return;
       }
       if (other.cid) {
-        client.publish(`bandukwa/v2/${code}/p/${other.cid}`, countPkt);
+        hub.publish(other.brokerIdx, `bandukwa/v2/${code}/p/${other.cid}`, countPkt);
       }
     });
 
     this.emitStatus(`Player #${peerId} joined (${total}/${MAX_ROOM_PLAYERS}).`);
     this.emitCount();
 
-    void this.tryUpgradeCloudPeerWebRTC(code, client, peerId, cid, link);
+    void this.tryUpgradeCloudPeerWebRTC(code, hub, peerId, cid, link);
   }
 
   private async tryUpgradeCloudPeerWebRTC(
     code: string,
-    client: WssMqttClient,
+    hub: WssRelayHub,
     peerId: number,
     cid: string,
     link: PeerLink,
@@ -1181,7 +1221,7 @@ export class P2PManager {
       if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
         if (!this.peers.has(peerId)) return;
         link.dcOpen = false;
-        if (client.isOpen) {
+        if (hub.isOpen) {
           link.relayActive = true;
           this.emitCount();
         }
@@ -1221,7 +1261,7 @@ export class P2PManager {
     dc.onclose = () => {
       if (!this.peers.has(peerId)) return;
       link.dcOpen = false;
-      if (client.isOpen) {
+      if (hub.isOpen) {
         link.relayActive = true;
         this.emitCount();
       } else {
@@ -1233,7 +1273,7 @@ export class P2PManager {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await waitIceComplete(pc);
-      if (!client.isOpen || !this.peers.has(peerId)) return;
+      if (!hub.isOpen || !this.peers.has(peerId)) return;
       const sigPkt: CloudPeerPacket = {
         k: 'sig',
         sdp: {
@@ -1241,24 +1281,21 @@ export class P2PManager {
           sdp: pc.localDescription?.sdp ?? '',
         },
       };
-      client.publish(`bandukwa/v2/${code}/p/${cid}`, JSON.stringify(sigPkt));
+      hub.publish(link.brokerIdx, `bandukwa/v2/${code}/p/${cid}`, JSON.stringify(sigPkt));
     } catch {
       // Remain on WSS relay
     }
   }
 
   private async joinRoomViaCloud(code: string): Promise<void> {
-    const client = await WssMqttClient.connectForRoom(code, 6500);
     const cid = Math.random().toString(36).slice(2, 10);
     const hostTopic = `bandukwa/v2/${code}/host`;
     const myTopic = `bandukwa/v2/${code}/p/${cid}`;
 
-    this.cloudClient = client;
     this.cloudClientId = cid;
     this.usingCloud = true;
     this.isHost = false;
-
-    await client.subscribe(myTopic);
+    this.joinPollCancelled = false;
 
     let pc: RTCPeerConnection | null = null;
     try {
@@ -1268,7 +1305,7 @@ export class P2PManager {
         if (this.roomCode !== code || !pc) return;
         if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
           this.joinDcOpen = false;
-          if (client.isOpen) {
+          if (this.cloudClient?.isOpen) {
             this.joinRelayActive = true;
             this.emitCount();
           }
@@ -1293,7 +1330,7 @@ export class P2PManager {
         };
         dc.onclose = () => {
           this.joinDcOpen = false;
-          if (this.roomCode === code && client.isOpen) {
+          if (this.roomCode === code && this.cloudClient?.isOpen) {
             this.joinRelayActive = true;
             this.emitCount();
           }
@@ -1307,6 +1344,8 @@ export class P2PManager {
       let settled = false;
       let retryTimer: number | null = null;
       let timeoutTimer: number | null = null;
+      const candidates = new Map<number, WssMqttClient>();
+      let failedBrokers = 0;
 
       const cleanupTimers = () => {
         if (retryTimer !== null) {
@@ -1319,28 +1358,36 @@ export class P2PManager {
         }
       };
 
+      const closeAllCandidates = (exceptIdx?: number) => {
+        candidates.forEach((c, idx) => {
+          if (idx !== exceptIdx) {
+            c.onMessage = undefined;
+            c.onClose = undefined;
+            c.close();
+          }
+        });
+      };
+
       const fail = (msg: string) => {
         if (settled) return;
         settled = true;
+        this.abortCloudJoin = null;
         cleanupTimers();
+        closeAllCandidates();
         void this.leaveRoom();
         reject(new Error(msg));
       };
 
-      client.onClose = () => {
-        if (!settled) {
-          fail('Disconnected from multiplayer relay.');
-          return;
-        }
-        this.joinDcOpen = false;
-        this.joinRelayActive = false;
-        this.emitCount();
-        if (this.roomCode === code) {
-          this.emitStatus('Disconnected from host.');
-        }
+      this.abortCloudJoin = () => {
+        if (settled) return;
+        settled = true;
+        this.abortCloudJoin = null;
+        cleanupTimers();
+        closeAllCandidates();
+        reject(new Error('Connection cancelled.'));
       };
 
-      client.onMessage = (_topic, rawPayload) => {
+      const handlePacket = (brokerIdx: number, client: WssMqttClient, rawPayload: string) => {
         let pkt: CloudPeerPacket;
         try {
           pkt = JSON.parse(rawPayload) as CloudPeerPacket;
@@ -1361,7 +1408,20 @@ export class P2PManager {
           this.joinRelayActive = true;
           if (!settled) {
             settled = true;
+            this.abortCloudJoin = null;
             cleanupTimers();
+            this.cloudClient = client;
+            closeAllCandidates(brokerIdx);
+
+            client.onClose = () => {
+              this.joinDcOpen = false;
+              this.joinRelayActive = false;
+              this.emitCount();
+              if (this.roomCode === code) {
+                this.emitStatus('Disconnected from host.');
+              }
+            };
+
             this.emitRoom();
             this.emitCount();
             this.startPingLoop();
@@ -1380,6 +1440,8 @@ export class P2PManager {
           }
           return;
         }
+
+        if (!settled || client !== this.cloudClient) return;
 
         if (pkt.k === 'rc') {
           this.roomPlayerCount = pkt.count;
@@ -1429,22 +1491,52 @@ export class P2PManager {
         }
       };
 
-      const sendJoin = () => {
-        if (!settled && client.isOpen) {
-          client.publish(hostTopic, JSON.stringify({ k: 'join', cid } satisfies CloudHostPacket));
-        }
+      const sendJoinAll = () => {
+        if (settled) return;
+        const pkt = JSON.stringify({ k: 'join', cid } satisfies CloudHostPacket);
+        candidates.forEach((c) => {
+          if (c.isOpen) c.publish(hostTopic, pkt);
+        });
       };
 
-      sendJoin();
-      retryTimer = window.setInterval(sendJoin, 650);
+      BROKER_DEFS.forEach((def, idx) => {
+        const c = new WssMqttClient();
+        candidates.set(idx, c);
+        void (async () => {
+          try {
+            await c.connect(def.url, 12000, def);
+            if (settled || this.joinPollCancelled) {
+              c.close();
+              return;
+            }
+            c.onMessage = (_t, payload) => handlePacket(idx, c, payload);
+            await c.subscribe(myTopic, 6000);
+            if (settled || this.joinPollCancelled) {
+              c.close();
+              return;
+            }
+            c.publish(hostTopic, JSON.stringify({ k: 'join', cid } satisfies CloudHostPacket));
+          } catch {
+            candidates.delete(idx);
+            failedBrokers++;
+            if (failedBrokers >= BROKER_DEFS.length && !settled) {
+              fail('Unable to reach multiplayer servers. Check your internet connection.');
+            }
+          }
+        })();
+      });
+
+      retryTimer = window.setInterval(sendJoinAll, 700);
       timeoutTimer = window.setTimeout(() => {
         fail('Room not found or host is offline. Check the 5-digit code.');
-      }, 6000);
+      }, 13500);
     });
   }
 
   async leaveRoom(): Promise<void> {
     this.joinPollCancelled = true;
+    this.abortCloudJoin?.();
+    this.abortCloudJoin = null;
     this.stopPingLoop();
     if (this.pollTimer !== null) {
       clearTimeout(this.pollTimer);
@@ -1464,16 +1556,17 @@ export class P2PManager {
     const wasCloud = this.usingCloud;
     const wasHost = this.isHost;
 
-    if (wasCloud && oldCode && this.cloudClient?.isOpen) {
-      if (!wasHost) {
+    if (wasCloud && oldCode) {
+      if (!wasHost && this.cloudClient?.isOpen) {
         this.cloudClient.publish(
           `bandukwa/v2/${oldCode}/host`,
           JSON.stringify({ k: 'bye', cid: this.cloudClientId, id: oldId } satisfies CloudHostPacket),
         );
-      } else {
+      } else if (wasHost && this.cloudHostHub?.isOpen) {
         this.peers.forEach((p) => {
           if (p.cid) {
-            this.cloudClient?.publish(
+            this.cloudHostHub?.publish(
+              p.brokerIdx,
               `bandukwa/v2/${oldCode}/p/${p.cid}`,
               JSON.stringify({ k: 'bye', id: 0 } satisfies CloudPeerPacket),
             );
@@ -1492,10 +1585,12 @@ export class P2PManager {
     this.cloudCidToPeerId.clear();
 
     try {
+      this.cloudHostHub?.close();
       this.cloudClient?.close();
     } catch {
       // ignore
     }
+    this.cloudHostHub = null;
     this.cloudClient = null;
 
     this.peers.forEach(({ pc, dc, fastDc }) => {

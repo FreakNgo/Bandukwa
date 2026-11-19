@@ -162,7 +162,7 @@ export function CustomHudEditor({ open, hudConfig, onSave, onClose }: CustomHudE
       </div>
 
       {/* Top Toolbar */}
-      <div className="relative z-20 mx-auto mt-3 flex max-w-2xl flex-wrap items-center justify-between gap-2 rounded-xl border border-white/15 bg-[#111720]/95 px-3.5 py-2.5 shadow-xl sm:px-4">
+      <div className="relative z-20 mx-2 mt-[max(0.5rem,env(safe-area-inset-top))] flex max-w-2xl flex-wrap items-center justify-between gap-2 rounded-xl border border-white/15 bg-[#111720]/95 px-3 py-2 shadow-xl sm:mx-auto sm:mt-3 sm:px-4 sm:py-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-display text-sm font-bold text-white">HUD Layout</span>
           <button

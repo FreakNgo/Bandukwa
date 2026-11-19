@@ -1,7 +1,17 @@
-const BROKER_URLS = [
-  'wss://broker.emqx.io:8084/mqtt',
-  'wss://broker.hivemq.com:8884/mqtt',
-] as const;
+export interface BrokerDef {
+  url: string;
+  username?: string;
+  password?: string;
+  port443: boolean;
+}
+
+export const BROKER_DEFS: readonly BrokerDef[] = [
+  // Port 443 standard HTTPS/WSS port — works across strict mobile carriers, firewalls, and WebViews
+  { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public', port443: true },
+  // Fast global WebSocket MQTT relays
+  { url: 'wss://broker.emqx.io:8084/mqtt', port443: false },
+  { url: 'wss://broker.hivemq.com:8884/mqtt', port443: false },
+];
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -48,16 +58,8 @@ function buildPacket(headerByte: number, body: Uint8Array): Uint8Array<ArrayBuff
   return out;
 }
 
-export function brokerIndexForRoomCode(code: string): number {
-  const first = code.charAt(0);
-  return first === '8' || first === '9' ? 1 : 0;
-}
-
-export function generateRoomCodeForBroker(brokerIdx: number): string {
-  if (brokerIdx === 1) {
-    return String(Math.floor(80000 + Math.random() * 20000));
-  }
-  return String(Math.floor(10000 + Math.random() * 70000));
+export function generateFiveDigitRoomCode(): string {
+  return String(Math.floor(10000 + Math.random() * 90000));
 }
 
 export class WssMqttClient {
@@ -75,48 +77,20 @@ export class WssMqttClient {
     return !this.closed && this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
-  static async connectAnyBroker(
-    timeoutPerBrokerMs = 4500,
-  ): Promise<{ client: WssMqttClient; brokerIdx: number }> {
-    const attempts = BROKER_URLS.map((url, idx) => {
-      const client = new WssMqttClient();
-      return client
-        .connect(url, timeoutPerBrokerMs)
-        .then(() => ({ client, brokerIdx: idx }))
-        .catch((err) => {
-          client.close();
-          throw err instanceof Error ? err : new Error('Relay connection failed.');
-        });
-    });
-
-    let winner: { client: WssMqttClient; brokerIdx: number };
-    try {
-      winner = await Promise.any(attempts);
-    } catch {
-      throw new Error('Could not reach multiplayer relay.');
-    }
-
-    // Close any slower broker sockets once they settle so no stray connections remain
-    attempts.forEach((p, idx) => {
-      if (idx !== winner.brokerIdx) {
-        void p.then((res) => res.client.close()).catch(() => {});
-      }
-    });
-
-    return winner;
-  }
-
-  static async connectForRoom(code: string, timeoutMs = 6000): Promise<WssMqttClient> {
-    const idx = brokerIndexForRoomCode(code);
-    const client = new WssMqttClient();
-    await client.connect(BROKER_URLS[idx], timeoutMs);
-    return client;
-  }
-
-  connect(url: string, timeoutMs = 5000): Promise<void> {
+  connect(
+    url: string,
+    timeoutMs = 12000,
+    auth?: { username?: string; password?: string },
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(url, 'mqtt');
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(url, 'mqtt');
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('WebSocket unavailable.'));
+        return;
+      }
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
 
@@ -137,14 +111,23 @@ export class WssMqttClient {
 
       ws.onopen = () => {
         const clientId = `bw_${Math.random().toString(36).slice(2, 12)}`;
+        const hasAuth = Boolean(auth?.username && auth?.password);
+        const flags = hasAuth ? 0xc2 : 0x02;
         const varHeader = new Uint8Array([
           0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, // "MQTT"
           0x04, // Protocol Level 4 (3.1.1)
-          0x02, // Clean Session
+          flags,
           0x00, 0x1e, // Keep Alive 30s
         ]);
-        const payload = encodeUtf8Field(clientId);
-        ws.send(buildPacket(0x10, concatBytes([varHeader, payload])));
+        const parts: Uint8Array[] = [varHeader, encodeUtf8Field(clientId)];
+        if (hasAuth && auth?.username && auth?.password) {
+          parts.push(encodeUtf8Field(auth.username), encodeUtf8Field(auth.password));
+        }
+        try {
+          ws.send(buildPacket(0x10, concatBytes(parts)));
+        } catch {
+          finishErr('Failed to send relay handshake.');
+        }
       };
 
       ws.onmessage = (ev) => {
@@ -197,7 +180,7 @@ export class WssMqttClient {
     });
   }
 
-  subscribe(topic: string, timeoutMs = 4000): Promise<void> {
+  subscribe(topic: string, timeoutMs = 6000): Promise<void> {
     if (!this.isOpen || !this.ws) {
       return Promise.reject(new Error('Relay socket not connected.'));
     }
@@ -220,7 +203,13 @@ export class WssMqttClient {
         encodeUtf8Field(topic),
         new Uint8Array([0x00]),
       ]);
-      this.ws?.send(buildPacket(0x82, body));
+      try {
+        this.ws?.send(buildPacket(0x82, body));
+      } catch {
+        clearTimeout(timer);
+        this.subWaiters.delete(packetId);
+        reject(new Error('Failed to subscribe to room channel.'));
+      }
     });
   }
 
@@ -327,5 +316,88 @@ export class WssMqttClient {
     if (offset > 0) {
       this.rxBuf = this.rxBuf.subarray(offset);
     }
+  }
+}
+
+/**
+ * Multi-broker host hub:
+ * - Connects to Port-443 (shiftr.io) + :8084 (EMQX) + :8884 (HiveMQ) in parallel.
+ * - Resolves immediately on the FIRST healthy broker so room creation takes ~0.5-1.5s.
+ * - Silently attaches the remaining brokers in the background so mobile peers restricted
+ *   to Port 443 can ALWAYS reach hosts on desktop (and vice versa).
+ */
+export class WssRelayHub {
+  private clients = new Map<number, WssMqttClient>();
+  private closed = false;
+
+  onMessage?: (brokerIdx: number, topic: string, payload: string) => void;
+  onAllClosed?: () => void;
+
+  get isOpen(): boolean {
+    if (this.closed) return false;
+    for (const c of this.clients.values()) {
+      if (c.isOpen) return true;
+    }
+    return false;
+  }
+
+  async startHost(hostTopic: string, timeoutMs = 12000): Promise<void> {
+    const attempts = BROKER_DEFS.map(async (def, idx) => {
+      const client = new WssMqttClient();
+      await client.connect(def.url, timeoutMs, def);
+      if (this.closed) {
+        client.close();
+        throw new Error('Closed');
+      }
+      client.onMessage = (topic, payload) => {
+        if (!this.closed) {
+          this.onMessage?.(idx, topic, payload);
+        }
+      };
+      client.onClose = () => {
+        this.clients.delete(idx);
+        if (!this.closed && !this.isOpen) {
+          this.onAllClosed?.();
+        }
+      };
+      await client.subscribe(hostTopic, 6000);
+      if (this.closed) {
+        client.close();
+        throw new Error('Closed');
+      }
+      this.clients.set(idx, client);
+      return idx;
+    });
+
+    try {
+      await Promise.any(attempts);
+    } catch {
+      this.close();
+      throw new Error('Unable to reach multiplayer servers. Check your internet connection.');
+    }
+  }
+
+  publish(brokerIdx: number | undefined, topic: string, payload: string): void {
+    if (this.closed) return;
+    if (brokerIdx !== undefined) {
+      const preferred = this.clients.get(brokerIdx);
+      if (preferred?.isOpen) {
+        preferred.publish(topic, payload);
+        return;
+      }
+    }
+    for (const c of this.clients.values()) {
+      if (c.isOpen) {
+        c.publish(topic, payload);
+        return;
+      }
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.clients.forEach((c) => c.close());
+    this.clients.clear();
   }
 }

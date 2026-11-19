@@ -61,18 +61,18 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: SettingsDr
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#06090d]/85 p-3 sm:p-4">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#06090d]/85 p-2 sm:p-4">
         <div
-          className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-xl border border-white/12 bg-[#111720] p-5 text-[#eef2f6] shadow-2xl sm:p-6"
+          className="flex max-h-[94dvh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-white/12 bg-[#111720] text-[#eef2f6] shadow-2xl"
           role="dialog"
           aria-label="Quick Settings"
         >
-          <div className="mb-5 flex items-center justify-between border-b border-white/10 pb-3.5">
+          <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3 sm:px-6 sm:py-4">
             <div>
-              <h2 className="font-display text-xl font-bold tracking-wide text-white">
+              <h2 className="font-display text-lg font-bold tracking-wide text-white sm:text-xl">
                 Quick Settings
               </h2>
-              <p className="text-xs text-[#94a3b8]">
+              <p className="text-[11px] text-[#94a3b8] sm:text-xs">
                 Aiming, camera, performance, and Custom HUD
               </p>
             </div>
@@ -86,7 +86,7 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: SettingsDr
             </button>
           </div>
 
-          <div className="space-y-4">
+          <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6">
             <div>
               <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-[#cbd5e1]">
                 <span>Aim Sensitivity</span>
@@ -297,7 +297,7 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: SettingsDr
                 </div>
               </div>
 
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                 {hudToggles.map((item) => {
                   const active = hudCfg[item.key];
                   return (
@@ -359,7 +359,7 @@ export function SettingsDrawer({ open, settings, onChange, onClose }: SettingsDr
             </div>
           </div>
 
-          <div className="mt-6 flex items-center justify-between gap-3 border-t border-white/10 pt-4">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/10 bg-[#0d131b] px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
             <button
               type="button"
               onClick={() => onChange({ ...DEFAULT_SETTINGS, hudConfig: { ...DEFAULT_HUD_CONFIG } })}

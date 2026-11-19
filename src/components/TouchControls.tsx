@@ -375,8 +375,8 @@ export function TouchControls({
                 : { opacity, transform: `scale(${globalScale})`, transformOrigin: 'bottom left' }
           }
           className={`${
-            joyCenter || customJoy ? 'absolute' : 'absolute bottom-5 left-4 sm:bottom-8 sm:left-6'
-          } flex h-28 w-28 items-center justify-center rounded-full border transition-colors ${
+            joyCenter || customJoy ? 'absolute' : 'absolute bottom-4 left-4 [@media(max-height:440px)]:bottom-3 [@media(max-height:440px)]:left-3 sm:bottom-8 sm:left-6'
+          } flex h-24 w-24 items-center justify-center rounded-full border transition-colors sm:h-28 sm:w-28 ${
             sprintEngage
               ? 'border-amber-400/90 bg-[#0b0f14]/65'
               : joyActive
@@ -393,7 +393,7 @@ export function TouchControls({
           </span>
           <div
             style={{ transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)` }}
-            className={`h-12 w-12 rounded-full border shadow-lg ${
+            className={`h-11 w-11 rounded-full border shadow-lg sm:h-12 sm:w-12 ${
               sprintEngage ? 'border-amber-200 bg-amber-400' : 'border-amber-400/75 bg-amber-500/85'
             }`}
           />
@@ -419,8 +419,8 @@ export function TouchControls({
             : { opacity, transform: `scale(${globalScale})`, transformOrigin: 'bottom left' }
         }
         className={`${circleBtnBase} ${
-          touchLayout.fireLeft ? '' : 'absolute bottom-36 left-4 sm:bottom-44 sm:left-6'
-        } h-[52px] w-[52px] border-amber-400/60 bg-[#0b0f14]/72 text-amber-400`}
+          touchLayout.fireLeft ? '' : 'absolute bottom-32 left-4 [@media(max-height:440px)]:bottom-[116px] [@media(max-height:440px)]:left-3 sm:bottom-44 sm:left-6'
+        } h-[50px] w-[50px] border-amber-400/60 bg-[#0b0f14]/72 text-amber-400 sm:h-[52px] sm:w-[52px]`}
         aria-label="Left quick fire"
       >
         <Flame className="h-5 w-5" />
@@ -433,7 +433,7 @@ export function TouchControls({
           transform: `scale(${globalScale})`,
           transformOrigin: 'bottom right',
         }}
-        className="pointer-events-none absolute right-4 bottom-5 h-[172px] w-[190px] sm:right-6 sm:bottom-8"
+        className="pointer-events-none absolute right-[max(0.75rem,env(safe-area-inset-right))] bottom-[max(1rem,env(safe-area-inset-bottom))] h-[172px] w-[190px] sm:right-6 sm:bottom-8"
       >
         {rightIds.map((id) => renderRightButton(id, true))}
       </div>

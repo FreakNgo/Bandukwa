@@ -223,7 +223,7 @@ export function HudOverlay({
       {/* Responsive Non-Overlapping Top HUD Row */}
       <div
         style={hudOpacityStyle}
-        className="fixed inset-x-3 top-2.5 z-20 flex items-start justify-between gap-2 sm:inset-x-5 sm:top-4"
+        className="fixed inset-x-[max(0.65rem,env(safe-area-inset-left))] top-[max(0.5rem,env(safe-area-inset-top))] z-20 flex items-start justify-between gap-2 sm:inset-x-5 sm:top-4"
       >
         {/* Top-Left: Tactical Radar + Mobile HP/Room or Desktop Killfeed */}
         <div className="flex items-start gap-2.5">
