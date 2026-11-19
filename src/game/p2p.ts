@@ -64,6 +64,8 @@ interface PeerLink {
   relayActive: boolean;
   cid?: string;
   brokerIdx?: number;
+  confirmedBroker?: boolean;
+  joinedAt?: number;
   lastSeen?: number;
 }
 
@@ -220,6 +222,7 @@ export class P2PManager {
   onRoomChange?: (code: string | null, isHost: boolean) => void;
   onMessage?: (msg: P2PMessage) => void;
   onPeerLeft?: (id: number) => void;
+  onPeerConfirmed?: (id: number) => void;
   onPingChange?: (pingMs: number | null) => void;
 
   get connectedCount(): number {
@@ -330,12 +333,14 @@ export class P2PManager {
         return;
       }
 
+      const isCriticalCtrl = msg.t === 'launch' || msg.t === 'lob';
       const httpRelayTargets: number[] = [];
       const cloudRelayTargets: number[] = [];
       this.peers.forEach((p, pid) => {
         const ch = pickChannelForMessage(p, msg);
-        if (dcSend(ch, serialized)) return;
-        if (p.relayActive) {
+        const sentDirect = dcSend(ch, serialized);
+        if (sentDirect && !isCriticalCtrl) return;
+        if (p.relayActive || isCriticalCtrl) {
           if (this.usingCloud) {
             cloudRelayTargets.push(pid);
           } else {
@@ -437,11 +442,12 @@ export class P2PManager {
     for (const pid of targetPeerIds) {
       const link = this.peers.get(pid);
       if (link?.cid) {
-        this.cloudHostHub.publish(
-          link.brokerIdx,
-          `bandukwa/v2/${this.roomCode}/p/${link.cid}`,
-          payload,
-        );
+        const topic = `bandukwa/v2/${this.roomCode}/p/${link.cid}`;
+        if (!link.confirmedBroker) {
+          this.cloudHostHub.publishAll(topic, payload);
+        } else {
+          this.cloudHostHub.publish(link.brokerIdx, topic, payload);
+        }
       }
     }
   }
@@ -451,11 +457,12 @@ export class P2PManager {
     const link = this.peers.get(targetId);
     if (!link?.cid) return;
     const payload = JSON.stringify({ k: 'msg', d: msg } satisfies CloudPeerPacket);
-    this.cloudHostHub.publish(
-      link.brokerIdx,
-      `bandukwa/v2/${this.roomCode}/p/${link.cid}`,
-      payload,
-    );
+    const topic = `bandukwa/v2/${this.roomCode}/p/${link.cid}`;
+    if (!link.confirmedBroker) {
+      this.cloudHostHub.publishAll(topic, payload);
+    } else {
+      this.cloudHostHub.publish(link.brokerIdx, topic, payload);
+    }
   }
 
   private postHttpRelay(msg: P2PMessage, to?: number): void {
@@ -576,7 +583,7 @@ export class P2PManager {
           return;
         }
         this.hostDc = dc;
-        dc.onopen = () => {
+        const onOpen = () => {
           if (this.roomCode !== code) return;
           this.joinDcOpen = true;
           this.joinRelayActive = false;
@@ -594,6 +601,8 @@ export class P2PManager {
             this.emitStatus(`Switched to relay in room ${code}.`);
           }
         };
+        dc.onopen = onOpen;
+        if (dc.readyState === 'open') onOpen();
       };
     }
 
@@ -1068,8 +1077,17 @@ export class P2PManager {
       }
 
       if (pkt.k === 'hb') {
-        const link = this.peers.get(pkt.from);
-        if (link) link.lastSeen = Date.now();
+        const pid = this.cloudCidToPeerId.get(pkt.cid) ?? pkt.from;
+        const link = this.peers.get(pid);
+        if (link) {
+          const wasConfirmed = Boolean(link.confirmedBroker);
+          link.lastSeen = Date.now();
+          link.brokerIdx = brokerIdx;
+          link.confirmedBroker = true;
+          if (!wasConfirmed) {
+            this.onPeerConfirmed?.(pid);
+          }
+        }
         return;
       }
 
@@ -1083,6 +1101,11 @@ export class P2PManager {
         const pid = this.cloudCidToPeerId.get(pkt.cid);
         if (pid !== undefined) {
           const link = this.peers.get(pid);
+          if (link) {
+            link.brokerIdx = brokerIdx;
+            link.confirmedBroker = true;
+            link.lastSeen = Date.now();
+          }
           if (link?.pc && link.pc.signalingState !== 'stable') {
             link.pc.setRemoteDescription(pkt.sdp).catch(() => {
               // stay on WSS relay
@@ -1096,8 +1119,13 @@ export class P2PManager {
         const pid = this.cloudCidToPeerId.get(pkt.cid) ?? pkt.from;
         const link = this.peers.get(pid);
         if (link) {
+          const wasConfirmed = Boolean(link.confirmedBroker);
           link.lastSeen = Date.now();
-          if (link.brokerIdx === undefined) link.brokerIdx = brokerIdx;
+          link.brokerIdx = brokerIdx;
+          link.confirmedBroker = true;
+          if (!wasConfirmed) {
+            this.onPeerConfirmed?.(pid);
+          }
           this.routeHostMessage(pid, pkt.d);
         }
       }
@@ -1139,7 +1167,10 @@ export class P2PManager {
       const link = this.peers.get(existingId);
       if (link) {
         link.lastSeen = Date.now();
-        link.brokerIdx = brokerIdx;
+        // Never let a racing duplicate join packet clobber an already-confirmed winning broker
+        if (!link.confirmedBroker && Date.now() - (link.joinedAt ?? 0) > 1500) {
+          link.brokerIdx = brokerIdx;
+        }
       }
       const total = 1 + this.peers.size;
       hub.publish(
@@ -1158,6 +1189,7 @@ export class P2PManager {
     const peerId = this.cloudNextPeerId++;
     this.cloudCidToPeerId.set(cid, peerId);
 
+    const now = Date.now();
     const link: PeerLink = {
       pc: null,
       dc: null,
@@ -1166,7 +1198,9 @@ export class P2PManager {
       relayActive: true,
       cid,
       brokerIdx,
-      lastSeen: Date.now(),
+      confirmedBroker: false,
+      joinedAt: now,
+      lastSeen: now,
     };
     this.peers.set(peerId, link);
 
@@ -1319,7 +1353,7 @@ export class P2PManager {
           return;
         }
         this.hostDc = dc;
-        dc.onopen = () => {
+        const onOpen = () => {
           if (this.roomCode !== code) return;
           this.joinDcOpen = true;
           this.joinRelayActive = false;
@@ -1335,6 +1369,8 @@ export class P2PManager {
             this.emitCount();
           }
         };
+        dc.onopen = onOpen;
+        if (dc.readyState === 'open') onOpen();
       };
     } catch {
       pc = null;
@@ -1412,6 +1448,12 @@ export class P2PManager {
             cleanupTimers();
             this.cloudClient = client;
             closeAllCandidates(brokerIdx);
+
+            // Confirm winning broker to Host immediately so Host -> Joiner traffic locks onto this broker
+            client.publish(
+              hostTopic,
+              JSON.stringify({ k: 'hb', cid, from: pkt.id } satisfies CloudHostPacket),
+            );
 
             client.onClose = () => {
               this.joinDcOpen = false;

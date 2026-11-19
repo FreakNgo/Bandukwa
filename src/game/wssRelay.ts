@@ -394,6 +394,15 @@ export class WssRelayHub {
     }
   }
 
+  publishAll(topic: string, payload: string): void {
+    if (this.closed) return;
+    this.clients.forEach((c) => {
+      if (c.isOpen) {
+        c.publish(topic, payload);
+      }
+    });
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;

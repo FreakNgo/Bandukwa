@@ -130,11 +130,13 @@ export default function App() {
     return hasCoarsePointer;
   }, [settings.controlMode, hasCoarsePointer]);
 
-  const handleStartMatch = useCallback(async () => {
+  const handleStartMatch = useCallback((withFullscreenGesture = true) => {
     setLobbyOpen(false);
     setSettingsOpen(false);
-    await enterGameFullscreen();
     engineRef.current?.deploy(callsign, !isMobileHud);
+    if (withFullscreenGesture) {
+      void enterGameFullscreen();
+    }
   }, [callsign, isMobileHud]);
 
   const startMatchRef = useRef(handleStartMatch);
@@ -153,6 +155,15 @@ export default function App() {
     return () => window.removeEventListener('resize', checkTouch);
   }, []);
 
+  const lobbyInfoRef = useRef({
+    callsign: '',
+    cardId: 0,
+    ready: true,
+    started: false,
+    lobbyOpen: true,
+  });
+  lobbyInfoRef.current = { callsign, cardId, ready, started: hud.started, lobbyOpen };
+
   useEffect(() => {
     const mount = canvasMountRef.current;
     if (!mount) return;
@@ -164,6 +175,17 @@ export default function App() {
       () => setLobbyOpen(true),
     );
     engine.p2p.onStatus = (msg) => setP2pStatus(msg);
+    engine.p2p.onPeerConfirmed = () => {
+      if (!engine.p2p.roomCode) return;
+      const cur = lobbyInfoRef.current;
+      engine.p2p.send({
+        t: 'lob',
+        n: (cur.callsign.trim() || 'Operator').slice(0, 14),
+        card: cur.cardId,
+        rdy: cur.ready ? 1 : 0,
+        inGame: cur.started ? 1 : 0,
+      });
+    };
     engine.onLobbyPeerLeft = (pid) => {
       setRemoteLobbyMap((prev) => {
         if (!(pid in prev)) return prev;
@@ -175,18 +197,33 @@ export default function App() {
     engine.onLobbyPacket = (msg) => {
       if (msg.t === 'lob') {
         const senderId = msg.from ?? 0;
-        setRemoteLobbyMap((prev) => ({
-          ...prev,
-          [senderId]: {
-            id: senderId,
-            name: String(msg.n || 'Operator').slice(0, 14),
-            cardId: msg.card ?? senderId % 4,
-            ready: Boolean(msg.rdy),
-            inGame: Boolean(msg.inGame),
-            isHost: senderId === 0,
-            isMe: false,
-          },
-        }));
+        const incomingInGame = Boolean(msg.inGame);
+        setRemoteLobbyMap((prev) => {
+          const prevMember = prev[senderId];
+          if (
+            senderId === 0 &&
+            !engine.p2p.isHost &&
+            prevMember &&
+            !prevMember.inGame &&
+            incomingInGame &&
+            lobbyInfoRef.current.lobbyOpen &&
+            !lobbyInfoRef.current.started
+          ) {
+            queueMicrotask(() => startMatchRef.current(false));
+          }
+          return {
+            ...prev,
+            [senderId]: {
+              id: senderId,
+              name: String(msg.n || 'Operator').slice(0, 14),
+              cardId: msg.card ?? senderId % 4,
+              ready: Boolean(msg.rdy),
+              inGame: incomingInGame,
+              isHost: senderId === 0,
+              isMe: false,
+            },
+          };
+        });
       } else if (msg.t === 'chat') {
         setChatMessages((prev) => [
           ...prev.slice(-14),
@@ -197,7 +234,7 @@ export default function App() {
           },
         ]);
       } else if (msg.t === 'launch') {
-        void startMatchRef.current();
+        startMatchRef.current(false);
       }
     };
     engineRef.current = engine;
@@ -230,7 +267,7 @@ export default function App() {
       });
     };
     sendLobbyState();
-    const timer = window.setInterval(sendLobbyState, 1100);
+    const timer = window.setInterval(sendLobbyState, 900);
     return () => clearInterval(timer);
   }, [hud.roomCode, hud.peerCount, hud.started, callsign, cardId, ready]);
 
@@ -314,7 +351,7 @@ export default function App() {
     if (engineRef.current?.p2p.roomCode && engineRef.current.p2p.isHost) {
       engineRef.current.p2p.send({ t: 'launch' });
     }
-    void handleStartMatch();
+    handleStartMatch(true);
   };
 
   const handleSendChat = (text: string) => {
@@ -364,7 +401,7 @@ export default function App() {
     Object.values(remoteLobbyMap).forEach((m) => merged.set(m.id, m));
     merged.set(myId, meMember);
     return Array.from(merged.values()).sort((a, b) => a.id - b.id);
-  }, [hud.roomCode, hud.isHostRoom, hud.started, callsign, cardId, ready, remoteLobbyMap]);
+  }, [hud.roomCode, hud.isHostRoom, hud.peerCount, hud.started, callsign, cardId, ready, remoteLobbyMap]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0b0f14]">
@@ -443,7 +480,7 @@ export default function App() {
         onEditProfile={() => setProfileConfirmed(false)}
         onToggleReady={() => setReady((r) => !r)}
         onBotCountChange={(count) => handleSettingsChange({ ...settings, botCount: count })}
-        onStartMatch={() => void handleStartMatch()}
+        onStartMatch={() => handleStartMatch(true)}
         onLaunchSquadMatch={handleLaunchSquadMatch}
         onSendChat={handleSendChat}
         onOpenSettings={handleOpenSettings}
