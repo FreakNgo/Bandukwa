@@ -45,6 +45,9 @@ export interface BotActor {
   hadLos: boolean;
   strafeDir: number;
   strafeTimer: number;
+  crouchTimer: number;
+  stepAccum: number;
+  lastFireTime: number;
   waypoint: [number, number];
   visual: CombatantVisual;
 }
@@ -94,11 +97,42 @@ export class BotManager {
         hadLos: false,
         strafeDir: Math.random() < 0.5 ? -1 : 1,
         strafeTimer: 1.5,
+        crouchTimer: 0,
+        stepAccum: 0,
+        lastFireTime: -10_000,
         waypoint: WAYPOINTS[Math.floor(Math.random() * WAYPOINTS.length)],
         visual,
       };
       this.spawnBot(bot);
       this.bots.push(bot);
+    }
+  }
+
+  alertTo(soundPos: THREE.Vector3, radius = 22): void {
+    for (const bot of this.bots) {
+      if (bot.hp <= 0 || bot.respawnTimer > 0 || bot.hadLos) continue;
+      const dist = Math.hypot(soundPos.x - bot.pos.x, soundPos.z - bot.pos.z);
+      if (dist <= radius) {
+        bot.waypoint = [
+          Math.max(-13, Math.min(13, soundPos.x + (Math.random() - 0.5) * 3.5)),
+          Math.max(-13, Math.min(13, soundPos.z + (Math.random() - 0.5) * 3.5)),
+        ];
+      }
+    }
+  }
+
+  notifyDamaged(bot: BotActor, attackerPos: THREE.Vector3): void {
+    bot.strafeDir = -bot.strafeDir;
+    bot.strafeTimer = 0.7 + Math.random() * 0.6;
+    if (Math.random() < 0.65) {
+      bot.crouchTimer = 0.55 + Math.random() * 0.3;
+    }
+    if (!bot.hadLos) {
+      bot.waypoint = [
+        Math.max(-13, Math.min(13, attackerPos.x)),
+        Math.max(-13, Math.min(13, attackerPos.z)),
+      ];
+      bot.fireCooldown = Math.max(bot.fireCooldown, 0.45);
     }
   }
 
@@ -124,6 +158,9 @@ export class BotManager {
     bot.hp = 100;
     bot.respawnTimer = 0;
     bot.hadLos = false;
+    bot.crouchTimer = 0;
+    bot.stepAccum = 0;
+    bot.lastFireTime = -10_000;
     bot.fireCooldown = 1.0 + Math.random() * 0.8;
     bot.waypoint = WAYPOINTS[Math.floor(Math.random() * WAYPOINTS.length)];
     bot.visual.root.visible = true;
@@ -145,6 +182,7 @@ export class BotManager {
       headshot: boolean,
       wallNormal: THREE.Vector3 | null,
     ) => void,
+    onBotStep?: (bot: BotActor) => void,
   ): void {
     for (const bot of this.bots) {
       if (bot.respawnTimer > 0) {
@@ -156,6 +194,7 @@ export class BotManager {
       }
 
       bot.fireCooldown -= dt;
+      if (bot.crouchTimer > 0) bot.crouchTimer = Math.max(0, bot.crouchTimer - dt);
       bot.strafeTimer -= dt;
       if (bot.strafeTimer <= 0) {
         bot.strafeTimer = 1.2 + Math.random() * 1.4;
@@ -258,11 +297,12 @@ export class BotManager {
             }
           }
 
-          _muz.set(bot.pos.x, bot.pos.y + 1.25, bot.pos.z);
+          _muz.set(bot.pos.x, bot.pos.y + (bot.crouchTimer > 0 ? 0.96 : 1.25), bot.pos.z);
           _end.copy(_org).addScaledVector(_dir, minT);
           const dmg = hitPlayer
             ? Math.round(Math.min(18, Math.max(9, spec.damage * (headshot ? 0.55 : 0.35))))
             : 0;
+          bot.lastFireTime = performance.now();
           onBotShoot(bot, _muz, _end, hitPlayer, dmg, headshot, hitWallNormal);
         }
       } else {
@@ -299,9 +339,18 @@ export class BotManager {
       }
 
       const botHorizSpeed = Math.hypot(bot.vel.x, bot.vel.z);
+      const isCrouching = bot.crouchTimer > 0;
+      const onFloor = Math.abs(bot.vel.y) < 0.4;
+      if (onFloor && botHorizSpeed > 1.2 && !isCrouching) {
+        bot.stepAccum += botHorizSpeed * dt;
+        if (bot.stepAccum > 2.2) {
+          bot.stepAccum = 0;
+          onBotStep?.(bot);
+        }
+      }
       bot.visual.root.position.copy(bot.pos);
       bot.visual.root.rotation.y = bot.yaw;
-      bot.visual.animate(dt, botHorizSpeed, false, 0, Math.abs(bot.vel.y) < 0.4);
+      bot.visual.animate(dt, botHorizSpeed, isCrouching, 0, onFloor);
       bot.visual.updateLabel(bot.name, bot.hp);
     }
   }

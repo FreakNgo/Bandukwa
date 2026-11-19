@@ -4,6 +4,7 @@ import type {
   CombatantHudRow,
   HudSnapshot,
   KillFeedItem,
+  RadarBlip,
   SettingsState,
 } from '../types/game';
 import { soundEngine } from './audio';
@@ -18,6 +19,11 @@ import {
   SPAWN_POINTS,
 } from './map';
 import { MAX_ROOM_PLAYERS, P2PManager, type P2PMessage } from './p2p';
+import {
+  computeReloadViewmodelPose,
+  getReloadStageIndex,
+  getReloadStages,
+} from './reloads';
 import { WEAPON_SPECS, WeaponModelCache } from './weapons';
 
 // Module-scope reusable scratch objects (zero GC in render loop)
@@ -69,6 +75,8 @@ interface RemotePeerState {
   crouching: boolean;
   lastPos: THREE.Vector3;
   horizSpeed: number;
+  stepAccum: number;
+  lastFireTime: number;
   visual: CombatantVisual;
 }
 
@@ -84,6 +92,7 @@ interface ActiveGrenade {
   vel: THREE.Vector3;
   ttl: number;
   isLocal: boolean;
+  bounced: boolean;
 }
 
 interface ActiveBlast {
@@ -101,6 +110,26 @@ interface ActiveDustPuff {
   ttl: number;
   maxTtl: number;
 }
+
+interface DroppedMag {
+  mesh: THREE.Mesh;
+  mat: THREE.MeshStandardMaterial;
+  vel: THREE.Vector3;
+  angVel: THREE.Vector3;
+  halfH: number;
+  ttl: number;
+  bounced: boolean;
+}
+
+const MAG_DROP_LOOK: Record<string, { sx: number; sy: number; sz: number; col: number }> = {
+  ak_rock_lock: { sx: 0.95, sy: 1.18, sz: 1.05, col: 0x6b3a1e },
+  deagle_heavy_pistol: { sx: 0.9, sy: 0.85, sz: 0.85, col: 0x9ca3af },
+  g36_paddle_bolt: { sx: 0.95, sy: 1.05, sz: 1.0, col: 0x252b33 },
+  m1911_speed_slide: { sx: 0.7, sy: 0.78, sz: 0.72, col: 0x4b5563 },
+  mp5_hk_slap: { sx: 0.72, sy: 1.12, sz: 0.65, col: 0x181c22 },
+  p90_top_mag: { sx: 1.15, sy: 0.34, sz: 2.8, col: 0x6b5b3e },
+  scar_bolt_catch: { sx: 1.1, sy: 0.96, sz: 1.15, col: 0x9a8260 },
+};
 
 function createBulletHoleTexture(): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
@@ -134,6 +163,7 @@ function createBulletHoleTexture(): THREE.CanvasTexture {
 
 export class BandukwaEngine {
   readonly isSoftwareGl: boolean;
+  readonly isLowSpecDevice: boolean;
   readonly renderer: THREE.WebGLRenderer;
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -141,6 +171,12 @@ export class BandukwaEngine {
 
   private container: HTMLElement;
   private sunLight: THREE.DirectionalLight;
+  private effectiveQuality: 'low' | 'balanced' | 'high' = 'balanced';
+  private autoDowngraded = false;
+  private frameEmaMs = 16.6;
+  private slowFrameStreak = 0;
+  private maxDustPuffs = 24;
+  private maxDecals = 40;
   private arenaMap: ArenaMap;
   private weaponCache = new WeaponModelCache();
   private botManager: BotManager;
@@ -187,6 +223,8 @@ export class BandukwaEngine {
   });
   private dustPuffs: ActiveDustPuff[] = [];
   private dustGeo = new THREE.SphereGeometry(0.11, 8, 6);
+  private droppedMags: DroppedMag[] = [];
+  private droppedMagGeo = new THREE.BoxGeometry(0.036, 0.145, 0.056);
 
   // Frag grenades & explosions
   private readonly maxGrenades = 2;
@@ -239,7 +277,10 @@ export class BandukwaEngine {
   private ammo = WEAPON_SPECS.map((w) => w.mag);
   private fireCooldown = 0;
   private reloadTimer = 0;
+  private reloadDuration = 1.95;
+  private emptyReload = true;
   private reloadCueStage = 0;
+  private reloadKickRoll = 0;
   private swapTimer = 0;
   private deadTimer = 0;
   private shotsFired = 0;
@@ -277,14 +318,21 @@ export class BandukwaEngine {
   private netSyncAccum = 0;
   private hudSyncAccum = 0;
 
-  // HUD transient feedback
+  // HUD transient feedback & game sense
   private hitMarker: 'none' | 'body' | 'head' = 'none';
   private hitMarkerTimer = 0;
   private damageFlash = 0;
+  private damageAngle: number | null = null;
+  private calloutText = '';
+  private calloutTimer = 0;
+  private streakCount = 0;
+  private streakTimer = 0;
   private killFeed: KillFeedItem[] = [];
   private killFeedSeq = 1;
   private onHudUpdate: (snapshot: HudSnapshot) => void;
   private onPauseRequested: () => void;
+  onLobbyPacket?: (msg: P2PMessage) => void;
+  onLobbyPeerLeft?: (id: number) => void;
 
   // Bound event listeners
   private onResizeBound: () => void;
@@ -310,17 +358,19 @@ export class BandukwaEngine {
     this.onPauseRequested = onPauseRequested;
 
     this.isSoftwareGl = detectSoftwareWebGL();
+    this.isLowSpecDevice =
+      this.isSoftwareGl ||
+      (typeof navigator !== 'undefined' && (navigator.hardwareConcurrency || 8) <= 4) ||
+      (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
+
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl,
+      antialias: !this.isSoftwareGl && !this.isLowSpecDevice,
       powerPreference: 'high-performance',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
-    this.renderer.shadowMap.enabled = !this.isSoftwareGl && this.settings.shadows;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
@@ -351,7 +401,7 @@ export class BandukwaEngine {
     this.sunLight = new THREE.DirectionalLight(0xfff1d4, 1.38);
     this.sunLight.position.set(22, 38, 18);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.mapSize.set(1024, 1024);
     this.sunLight.shadow.camera.near = 4;
     this.sunLight.shadow.camera.far = 95;
     this.sunLight.shadow.camera.left = -22;
@@ -365,6 +415,9 @@ export class BandukwaEngine {
     const rim = new THREE.DirectionalLight(0xaed0ff, 0.32);
     rim.position.set(-28, 20, -30);
     this.scene.add(rim);
+
+    this.applyQualityProfile();
+    this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
 
     // Muzzle flash sprite + dynamic flash light
     const flashCanvas = document.createElement('canvas');
@@ -424,7 +477,10 @@ export class BandukwaEngine {
     this.botManager.syncCount(this.settings.botCount);
 
     // Wire P2P callbacks
-    this.p2p.onPeerLeft = (id) => this.removeRemote(id);
+    this.p2p.onPeerLeft = (id) => {
+      this.removeRemote(id);
+      this.onLobbyPeerLeft?.(id);
+    };
     this.p2p.onMessage = (msg) => this.handleP2PMessage(msg);
     this.p2p.onRoomChange = () => {
       this.syncBotsForMode();
@@ -432,6 +488,9 @@ export class BandukwaEngine {
     };
     this.p2p.onPeerCountChange = () => {
       this.syncBotsForMode();
+      this.emitHud();
+    };
+    this.p2p.onPingChange = () => {
       this.emitHud();
     };
 
@@ -487,15 +546,55 @@ export class BandukwaEngine {
 
   // ---- Public API for React UI & Touch HUD ----
 
+  private applyQualityProfile(): void {
+    const q = this.settings.graphicsQuality ?? 'auto';
+    let tier: 'low' | 'balanced' | 'high';
+    if (q === 'auto') {
+      if (this.isSoftwareGl || this.autoDowngraded) {
+        tier = 'low';
+      } else if (this.isLowSpecDevice) {
+        tier = 'balanced';
+      } else {
+        tier = 'high';
+      }
+    } else {
+      tier = q;
+    }
+
+    this.effectiveQuality = tier;
+    const rawDpr = window.devicePixelRatio || 1;
+    const dpr =
+      tier === 'low' ? 1 : tier === 'balanced' ? Math.min(rawDpr, 1.35) : Math.min(rawDpr, 1.75);
+    this.renderer.setPixelRatio(dpr);
+
+    const wantShadows = !this.isSoftwareGl && this.settings.shadows && tier !== 'low';
+    this.renderer.shadowMap.enabled = wantShadows;
+    this.sunLight.castShadow = wantShadows;
+
+    const targetShadowSize = tier === 'high' ? 1536 : 1024;
+    if (this.sunLight.shadow.mapSize.x !== targetShadowSize) {
+      this.sunLight.shadow.mapSize.set(targetShadowSize, targetShadowSize);
+      this.sunLight.shadow.map?.dispose();
+      this.sunLight.shadow.map = null;
+    }
+    this.renderer.shadowMap.type = tier === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.maxDustPuffs = tier === 'low' ? 12 : tier === 'balanced' ? 24 : 36;
+    this.maxDecals = tier === 'low' ? 24 : tier === 'balanced' ? 40 : 56;
+  }
+
   private syncBotsForMode(): void {
     const inMultiplayerRoom = this.p2p.roomCode !== null;
     this.botManager.syncCount(inMultiplayerRoom ? 0 : this.settings.botCount);
   }
 
   updateSettings(next: SettingsState): void {
+    const prevQuality = this.settings.graphicsQuality;
     this.settings = { ...next };
+    if (prevQuality !== next.graphicsQuality) {
+      this.autoDowngraded = false;
+    }
     soundEngine.setVolume(next.volume);
-    this.renderer.shadowMap.enabled = !this.isSoftwareGl && next.shadows;
+    this.applyQualityProfile();
     this.syncBotsForMode();
     this.emitHud();
   }
@@ -580,6 +679,7 @@ export class BandukwaEngine {
     if (idx < 0 || idx >= WEAPON_SPECS.length || idx === this.weaponIdx) return;
     this.weaponIdx = idx;
     this.reloadTimer = 0;
+    this.reloadCueStage = 0;
     this.swapTimer = 0.24;
     this.equipViewmodel();
     soundEngine.swap();
@@ -593,9 +693,16 @@ export class BandukwaEngine {
   triggerReload(): void {
     const spec = WEAPON_SPECS[this.weaponIdx];
     if (this.reloadTimer > 0 || this.deadTimer > 0 || this.ammo[this.weaponIdx] >= spec.mag) return;
-    this.reloadTimer = spec.reloadTime;
-    this.reloadCueStage = 1;
-    soundEngine.reloadCue('out');
+    this.emptyReload = this.ammo[this.weaponIdx] <= 0;
+    this.reloadDuration = this.emptyReload ? spec.emptyReloadTime : spec.tacReloadTime;
+    this.reloadTimer = this.reloadDuration;
+    this.reloadCueStage = 0;
+    this.spawnDroppedMag(spec.reloadStyle);
+    const stages = getReloadStages(spec.reloadStyle, this.emptyReload);
+    if (stages[0]?.cue) {
+      soundEngine.reloadCue(stages[0].cue);
+      this.triggerReloadStageEffect(stages[0].cue);
+    }
     this.emitHud();
   }
 
@@ -652,15 +759,63 @@ export class BandukwaEngine {
 
     _org
       .copy(this.camera.position)
-      .addScaledVector(_dir, 0.52)
-      .addScaledVector(_right, 0.16);
-    _org.y -= 0.08;
+      .addScaledVector(_dir, 0.5)
+      .addScaledVector(_right, 0.14);
+    _org.y = Math.max(0.2, _org.y - 0.08);
 
-    _gThrowVel
-      .copy(_dir)
-      .multiplyScalar(16.5)
-      .addScaledVector(this.vel, 0.3);
-    _gThrowVel.y += 4.2;
+    // Raycast to solve ballistic arc straight to where crosshair aims
+    let bestT = 22;
+    let hitWall = false;
+    for (const c of this.arenaMap.colliders) {
+      const t = raycastOBB(this.camera.position, _dir, c, _norm);
+      if (t !== null && t > 0.6 && t < bestT) {
+        bestT = t;
+        _hitNorm.copy(_norm);
+        hitWall = true;
+      }
+    }
+    if (_dir.y < -1e-4) {
+      const tg = -this.camera.position.y / _dir.y;
+      if (tg > 0.6 && tg < bestT) {
+        bestT = tg;
+        hitWall = false;
+      }
+    }
+
+    if (hitWall) {
+      _gTarget
+        .copy(this.camera.position)
+        .addScaledVector(_dir, bestT)
+        .addScaledVector(_hitNorm, 0.38);
+      _gTarget.y = Math.max(0.12, _gTarget.y);
+    } else if (bestT < 22) {
+      _gTarget.copy(this.camera.position).addScaledVector(_dir, bestT);
+      _gTarget.y = Math.max(0.12, _gTarget.y);
+    } else {
+      // Aimed above horizon: project target ~15.5m downrange at ground/mid elevation
+      const horizLen = Math.hypot(_dir.x, _dir.z);
+      const nx = horizLen > 1e-4 ? _dir.x / horizLen : -Math.sin(this.yaw);
+      const nz = horizLen > 1e-4 ? _dir.z / horizLen : -Math.cos(this.yaw);
+      const pitchLift = Math.max(0, Math.min(1, _dir.y * 1.4));
+      const range = 12 + pitchLift * 5.5;
+      _gTarget.set(
+        this.camera.position.x + nx * range,
+        0.15 + pitchLift * 1.6,
+        this.camera.position.z + nz * range,
+      );
+    }
+
+    const dx = _gTarget.x - _org.x;
+    const dy = _gTarget.y - _org.y;
+    const dz = _gTarget.z - _org.z;
+    const horizDist = Math.hypot(dx, dz);
+    const flightTime = Math.max(0.24, Math.min(0.86, horizDist / 15.8));
+
+    _gThrowVel.set(
+      dx / flightTime + this.vel.x * 0.14,
+      dy / flightTime + 0.5 * 20 * flightTime,
+      dz / flightTime + this.vel.z * 0.14,
+    );
 
     this.spawnGrenade(_org, _gThrowVel, true);
     this.p2p.send({
@@ -767,6 +922,7 @@ export class BandukwaEngine {
     this.recoilCamPitch = 0;
     this.recoilCamYaw = 0;
     this.reloadTimer = 0;
+    this.reloadCueStage = 0;
     this.grenades = this.maxGrenades;
     this.grenadeRefillTimer = 0;
     this.ammo = WEAPON_SPECS.map((w) => w.mag);
@@ -988,6 +1144,7 @@ export class BandukwaEngine {
       return;
     }
     if (this.ammo[this.weaponIdx] <= 0) {
+      soundEngine.dryFire();
       this.triggerReload();
       return;
     }
@@ -1090,7 +1247,7 @@ export class BandukwaEngine {
     this.muzzleFlash.rotation.z = Math.random() * Math.PI * 2;
     this.flashTimer = 0.04;
     this.muzzleLight.intensity = 2.2;
-    soundEngine.shot(spec.soundType, 1);
+    soundEngine.shot(spec.id, 1, true);
 
     // Snappy camera recoil punch & spray counter increment
     this.shotsFired = Math.min(18, this.shotsFired + 1);
@@ -1113,15 +1270,22 @@ export class BandukwaEngine {
         hitBot.respawnTimer = 3.0;
         hitBot.visual.root.visible = false;
         this.me.kills++;
+        this.registerKillCallout(headshot);
         this.pushKillFeed(this.me.name, hitBot.name, spec.name, headshot);
+      } else {
+        this.botManager.notifyDamaged(hitBot, this.pos);
       }
     } else if (hitRemote) {
       const target = hitRemote as RemotePeerState;
       this.burstParticles(_end, 14, [1, 0.16, 0.12], 3.2, 0.45);
       this.showHitMarker(headshot);
-      this.p2p.send({ t: 'h', to: target.id, d: dmg, hd: headshot ? 1 : 0 });
+      this.p2p.send({ t: 'h', to: target.id, d: dmg, hd: headshot ? 1 : 0, w: this.weaponIdx });
     } else if (hitWall) {
       this.spawnWallHit(_end, _hitNorm);
+    }
+
+    if (this.p2p.roomCode === null) {
+      this.botManager.alertTo(this.pos, 22);
     }
 
     this.p2p.send({
@@ -1136,6 +1300,26 @@ export class BandukwaEngine {
     });
 
     this.emitHud();
+  }
+
+  private registerKillCallout(headshot: boolean): void {
+    this.streakCount = this.streakTimer > 0 ? this.streakCount + 1 : 1;
+    this.streakTimer = 6.0;
+    if (this.streakCount >= 4) {
+      this.calloutText = 'DOMINATING';
+    } else if (this.streakCount === 3) {
+      this.calloutText = 'TRIPLE KILL';
+    } else if (this.streakCount === 2) {
+      this.calloutText = 'DOUBLE KILL';
+    } else if (headshot) {
+      this.calloutText = 'HEADSHOT';
+    } else {
+      this.calloutText = '';
+    }
+    if (this.calloutText) {
+      this.calloutTimer = 1.65;
+      soundEngine.killCallout(headshot);
+    }
   }
 
   private showHitMarker(headshot: boolean): void {
@@ -1157,15 +1341,32 @@ export class BandukwaEngine {
     this.emitHud();
   }
 
-  private applyDamageToPlayer(dmg: number, attackerName: string, weaponName: string, headshot: boolean): void {
+  private applyDamageToPlayer(
+    dmg: number,
+    attackerName: string,
+    weaponName: string,
+    headshot: boolean,
+    sourcePos?: THREE.Vector3,
+  ): void {
     if (this.deadTimer > 0) return;
     this.hp = Math.max(0, this.hp - dmg);
     this.damageFlash = 1.0;
+    if (sourcePos) {
+      const dx = sourcePos.x - this.pos.x;
+      const dz = sourcePos.z - this.pos.z;
+      if (dx * dx + dz * dz > 0.04) {
+        const fwdDot = dx * -Math.sin(this.yaw) + dz * -Math.cos(this.yaw);
+        const rightDot = dx * Math.cos(this.yaw) + dz * -Math.sin(this.yaw);
+        this.damageAngle = Math.atan2(rightDot, fwdDot);
+      }
+    }
     this.screenShake = Math.min(0.28, this.screenShake + 0.16);
     soundEngine.tone(175, 85, 0.12, 0.25, 'sawtooth');
     if (this.hp <= 0) {
       this.deadTimer = 3.0;
       this.me.deaths++;
+      this.streakCount = 0;
+      this.streakTimer = 0;
       this.crouching = false;
       this.crouchToggled = false;
       this.slideTimer = 0;
@@ -1198,6 +1399,8 @@ export class BandukwaEngine {
       crouching: false,
       lastPos: new THREE.Vector3(),
       horizSpeed: 0,
+      stepAccum: 0,
+      lastFireTime: -10_000,
       visual,
     };
     this.remotes.set(id, state);
@@ -1225,6 +1428,8 @@ export class BandukwaEngine {
         r.pitch = m.q;
         r.crouching = Boolean(m.sl);
         r.hp = m.hp;
+        if (typeof m.kl === 'number') r.kills = Math.max(r.kills, m.kl);
+        if (typeof m.dt === 'number') r.deaths = Math.max(r.deaths, m.dt);
         r.visual.root.visible = r.hp > 0;
         if (r.weaponIdx !== m.w && m.w >= 0 && m.w < WEAPON_SPECS.length) {
           r.weaponIdx = m.w;
@@ -1234,12 +1439,16 @@ export class BandukwaEngine {
         break;
       }
       case 'f': {
+        if (m.from !== undefined) {
+          const shooter = this.remotes.get(m.from);
+          if (shooter) shooter.lastFireTime = performance.now();
+        }
         _muz.set(m.m[0], m.m[1], m.m[2]);
         _end.set(m.e[0], m.e[1], m.e[2]);
         this.spawnTracer(_muz, _end);
         const dist = this.pos.distanceTo(_muz);
         const spec = WEAPON_SPECS[m.w] ?? WEAPON_SPECS[0];
-        soundEngine.shot(spec.soundType, Math.max(0.08, 1 - dist / 55));
+        soundEngine.shot(spec.id, Math.max(0.08, 1 - dist / 55), false);
         if (m.n) {
           _hitNorm.set(m.n[0], m.n[1], m.n[2]);
           this.spawnWallHit(_end, _hitNorm);
@@ -1260,9 +1469,14 @@ export class BandukwaEngine {
         const weaponLabel =
           m.w === -1
             ? 'Frag Grenade'
-            : (attacker ? WEAPON_SPECS[attacker.weaponIdx] : WEAPON_SPECS[0]).name;
+            : (m.w !== undefined && WEAPON_SPECS[m.w]
+                ? WEAPON_SPECS[m.w]
+                : attacker
+                  ? WEAPON_SPECS[attacker.weaponIdx]
+                  : WEAPON_SPECS[0]
+              ).name;
         const prevHp = this.hp;
-        this.applyDamageToPlayer(m.d, attacker?.name ?? 'Enemy', weaponLabel, Boolean(m.hd));
+        this.applyDamageToPlayer(m.d, attacker?.name ?? 'Enemy', weaponLabel, Boolean(m.hd), attacker?.pos);
         if (prevHp > 0 && this.hp <= 0) {
           this.p2p.send({
             t: 'k',
@@ -1277,6 +1491,7 @@ export class BandukwaEngine {
       case 'k': {
         if (m.k === this.p2p.myId && m.v !== this.p2p.myId) {
           this.me.kills++;
+          this.registerKillCallout(Boolean(m.hd));
         } else if (m.k !== m.v) {
           const killer = this.remotes.get(m.k);
           if (killer) killer.kills++;
@@ -1297,6 +1512,12 @@ export class BandukwaEngine {
       }
       case 'bye': {
         this.removeRemote(m.id);
+        break;
+      }
+      case 'lob':
+      case 'launch':
+      case 'chat': {
+        this.onLobbyPacket?.(m);
         break;
       }
     }
@@ -1321,8 +1542,9 @@ export class BandukwaEngine {
       ledMat,
       pos: origin.clone(),
       vel: velocity.clone(),
-      ttl: 2.1,
+      ttl: 1.85,
       isLocal,
+      bounced: false,
     });
   }
 
@@ -1354,41 +1576,59 @@ export class BandukwaEngine {
           g.pos.addScaledVector(_gRayDir, moveT);
           const vn = g.vel.dot(_hitNorm);
           if (vn < 0) {
-            g.vel.addScaledVector(_hitNorm, -1.48 * vn);
-            g.vel.multiplyScalar(0.76);
+            if (!g.bounced && vn < -2.2) {
+              g.bounced = true;
+              soundEngine.grenadeBounce(Math.max(0.1, 1 - this.pos.distanceTo(g.pos) / 28));
+            }
+            g.vel.addScaledVector(_hitNorm, -1.14 * vn);
+            g.vel.multiplyScalar(0.36);
           }
         } else {
           g.pos.add(_gStep);
         }
       }
 
-      // Ground bounce
+      // Ground settle & heavy sand damping (minimal bounce so it drops near aim point)
       if (g.pos.y <= 0.11) {
         g.pos.y = 0.11;
-        if (g.vel.y < -0.9) {
-          g.vel.y = -g.vel.y * 0.42;
+        if (!g.bounced && g.vel.y < -2.0) {
+          g.bounced = true;
+          soundEngine.grenadeBounce(Math.max(0.1, 1 - this.pos.distanceTo(g.pos) / 28));
+          g.vel.x *= 0.42;
+          g.vel.z *= 0.42;
+        }
+        if (g.vel.y < -1.6) {
+          g.vel.y = -g.vel.y * 0.12;
         } else {
           g.vel.y = 0;
         }
-        g.vel.x *= 0.86;
-        g.vel.z *= 0.86;
       }
 
-      // Arena perimeter bounce
+      if (g.pos.y <= 0.14) {
+        const sandDrag = Math.exp(-16.0 * dt);
+        g.vel.x *= sandDrag;
+        g.vel.z *= sandDrag;
+        if (Math.hypot(g.vel.x, g.vel.z) < 0.14 && Math.abs(g.vel.y) < 0.1) {
+          g.vel.x = 0;
+          g.vel.z = 0;
+        }
+      }
+
+      // Arena perimeter damp
       const bound = ARENA_HALF_EXTENT - 0.15;
       if (g.pos.x < -bound) {
         g.pos.x = -bound;
-        g.vel.x = Math.abs(g.vel.x) * 0.5;
+        g.vel.x = Math.abs(g.vel.x) * 0.28;
       } else if (g.pos.x > bound) {
         g.pos.x = bound;
-        g.vel.x = -Math.abs(g.vel.x) * 0.5;
+        g.vel.x = -Math.abs(g.vel.x) * 0.28;
       }
       if (g.pos.z < -bound) {
         g.pos.z = -bound;
-        g.vel.z = Math.abs(g.vel.z) * 0.5;
+        g.vel.z = Math.abs(g.vel.z) * 0.28;
       } else if (g.pos.z > bound) {
         g.pos.z = bound;
-        g.vel.z = -Math.abs(g.vel.z) * 0.5;
+        g.vel.z = -Math.abs(g.vel.z) * 0.28;
       }
 
       g.mesh.position.copy(g.pos);
@@ -1458,7 +1698,7 @@ export class BandukwaEngine {
       this.screenShake = Math.min(0.42, this.screenShake + 0.36 * (1 - distToMe / 16));
     }
 
-    // Visual shockwave + fireball particles
+    // Visual shockwave + fireball particles (skip dynamic PointLight on low-end GPUs to prevent shader stalls)
     const mat = new THREE.MeshBasicMaterial({
       color: 0xff8c32,
       transparent: true,
@@ -1468,14 +1708,19 @@ export class BandukwaEngine {
     });
     const blastMesh = new THREE.Mesh(this.blastGeo, mat);
     blastMesh.position.copy(blastPos);
-    const light = new THREE.PointLight(0xff9436, 10, 14);
+    const light = new THREE.PointLight(0xff9436, this.effectiveQuality === 'low' ? 0 : 10, 14);
     light.position.copy(blastPos);
     light.position.y += 0.4;
-    this.scene.add(blastMesh, light);
+    if (this.effectiveQuality !== 'low') {
+      this.scene.add(blastMesh, light);
+    } else {
+      this.scene.add(blastMesh);
+    }
     this.activeBlasts.push({ mesh: blastMesh, mat, light, ttl: 0.34, maxTtl: 0.34 });
 
-    this.burstParticles(blastPos, 46, [1, 0.58, 0.16], 9.2, 0.62);
-    this.burstParticles(blastPos, 24, [0.42, 0.38, 0.34], 5.0, 0.85);
+    const burstScale = this.effectiveQuality === 'low' ? 0.55 : 1;
+    this.burstParticles(blastPos, Math.round(46 * burstScale), [1, 0.58, 0.16], 9.2, 0.62);
+    this.burstParticles(blastPos, Math.round(24 * burstScale), [0.42, 0.38, 0.34], 5.0, 0.85);
 
     // Only the throwing client calculates & awards grenade splash damage
     if (!g.isLocal) return;
@@ -1504,7 +1749,10 @@ export class BandukwaEngine {
         bot.respawnTimer = 3.0;
         bot.visual.root.visible = false;
         this.me.kills++;
+        this.registerKillCallout(false);
         this.pushKillFeed(this.me.name, bot.name, 'Frag Grenade', false);
+      } else {
+        this.botManager.notifyDamaged(bot, blastPos);
       }
     }
 
@@ -1522,7 +1770,7 @@ export class BandukwaEngine {
 
     const selfDmg = Math.round(computeSplash(this.pos) * 0.65);
     if (selfDmg > 0 && this.deadTimer <= 0) {
-      this.applyDamageToPlayer(selfDmg, this.me.name, 'Frag Grenade', false);
+      this.applyDamageToPlayer(selfDmg, this.me.name, 'Frag Grenade', false, blastPos);
     }
   }
 
@@ -1592,7 +1840,7 @@ export class BandukwaEngine {
       const maxTtl = 0.34 + Math.random() * 0.12;
       this.dustPuffs.push({ mesh, mat, vel, ttl: maxTtl, maxTtl });
     }
-    while (this.dustPuffs.length > 36) {
+    while (this.dustPuffs.length > this.maxDustPuffs) {
       const old = this.dustPuffs.shift();
       if (old) {
         this.scene.remove(old.mesh);
@@ -1602,8 +1850,10 @@ export class BandukwaEngine {
   }
 
   private spawnWallHit(pos: THREE.Vector3, normal: THREE.Vector3): void {
-    this.burstDirectionalSparks(pos, normal, 10);
-    this.spawnDustPuff(pos, normal);
+    this.burstDirectionalSparks(pos, normal, this.effectiveQuality === 'low' ? 6 : 10);
+    if (this.effectiveQuality !== 'low') {
+      this.spawnDustPuff(pos, normal);
+    }
     this.spawnDecal(pos, normal);
     const dist = this.pos.distanceTo(pos);
     soundEngine.wallImpact(Math.max(0.08, 1 - dist / 42));
@@ -1628,9 +1878,106 @@ export class BandukwaEngine {
     mesh.rotateZ(Math.random() * Math.PI * 2);
     this.scene.add(mesh);
     this.decals.push(mesh);
-    if (this.decals.length > 56) {
+    while (this.decals.length > this.maxDecals) {
       const old = this.decals.shift();
       if (old) this.scene.remove(old);
+    }
+  }
+
+  private spawnDroppedMag(style: string): void {
+    const look = MAG_DROP_LOOK[style] ?? MAG_DROP_LOOK.ak_rock_lock;
+    const mat = new THREE.MeshStandardMaterial({
+      color: look.col,
+      roughness: 0.58,
+      metalness: 0.35,
+    });
+    const mesh = new THREE.Mesh(this.droppedMagGeo, mat);
+    mesh.scale.set(look.sx, look.sy, look.sz);
+
+    this.camera.updateMatrixWorld(true);
+    this.camera.getWorldDirection(_dir);
+    _right.crossVectors(_dir, this.camera.up).normalize();
+    _camUp.crossVectors(_right, _dir).normalize();
+
+    mesh.position
+      .copy(this.camera.position)
+      .addScaledVector(_dir, 0.36)
+      .addScaledVector(_right, 0.08)
+      .addScaledVector(_camUp, -0.26);
+    mesh.rotation.set(Math.random(), this.yaw + 0.4, (Math.random() - 0.5) * 0.6);
+    this.scene.add(mesh);
+
+    const vel = new THREE.Vector3()
+      .copy(this.vel)
+      .multiplyScalar(0.45)
+      .addScaledVector(_right, -0.85 - Math.random() * 0.55)
+      .addScaledVector(_dir, 0.45);
+    vel.y = -1.2 - Math.random() * 0.6;
+
+    const angVel = new THREE.Vector3(
+      (Math.random() - 0.5) * 9,
+      (Math.random() - 0.5) * 8,
+      (Math.random() - 0.5) * 11,
+    );
+
+    this.droppedMags.push({
+      mesh,
+      mat,
+      vel,
+      angVel,
+      halfH: 0.072 * look.sy,
+      ttl: 3.0,
+      bounced: false,
+    });
+    while (this.droppedMags.length > 6) {
+      const old = this.droppedMags.shift();
+      if (old) {
+        this.scene.remove(old.mesh);
+        old.mat.dispose();
+      }
+    }
+  }
+
+  private triggerReloadStageEffect(cue: string): void {
+    this.camera.updateMatrixWorld(true);
+    this.camera.getWorldDirection(_dir);
+    _right.crossVectors(_dir, this.camera.up).normalize();
+    _camUp.crossVectors(_right, _dir).normalize();
+    _org
+      .copy(this.camera.position)
+      .addScaledVector(_dir, 0.42)
+      .addScaledVector(_right, 0.14)
+      .addScaledVector(_camUp, -0.14);
+
+    if (
+      cue === 'ak_rack' ||
+      cue === 'deagle_slide' ||
+      cue === 'g36_bolt' ||
+      cue === 'slide_stop' ||
+      cue === 'hk_slap' ||
+      cue === 'hk_lock' ||
+      cue === 'smg_rack' ||
+      cue === 'bolt_catch'
+    ) {
+      this.vmKick = Math.min(1.05, this.vmKick + 0.28);
+      this.screenShake = Math.min(0.16, this.screenShake + 0.068);
+      this.reloadKickRoll -= 0.032;
+      this.burstParticles(_org, 7, [1.0, 0.84, 0.44], 2.2, 0.2);
+    } else if (
+      cue === 'ak_rock_in' ||
+      cue === 'deagle_slam' ||
+      cue === 'mag_click' ||
+      cue === 'mag_tap' ||
+      cue === 'p90_smack' ||
+      cue === 'p90_seat' ||
+      cue === 'heavy_in' ||
+      cue === 'smg_in' ||
+      cue === 'pistol_seat'
+    ) {
+      this.vmKick = Math.min(1.0, this.vmKick + 0.16);
+      this.screenShake = Math.min(0.12, this.screenShake + 0.038);
+      this.reloadKickRoll += (Math.random() > 0.5 ? 1 : -1) * 0.022;
+      this.burstParticles(_org, 4, [0.82, 0.72, 0.56], 1.4, 0.22);
     }
   }
 
@@ -1772,8 +2119,29 @@ export class BandukwaEngine {
   private tick(): void {
     if (this.disposed) return;
     const now = performance.now();
-    const dt = Math.min((now - this.lastTime) / 1000, 0.05);
+    const rawMs = now - this.lastTime;
+    const dt = Math.min(rawMs / 1000, 0.05);
     this.lastTime = now;
+
+    // Auto performance guard: step down quality cleanly if sustained <40 FPS on low-end GPUs
+    if (
+      this.playing &&
+      !this.autoDowngraded &&
+      this.settings.graphicsQuality === 'auto' &&
+      rawMs > 4 &&
+      rawMs < 200
+    ) {
+      this.frameEmaMs = this.frameEmaMs * 0.94 + rawMs * 0.06;
+      if (this.frameEmaMs > 25) {
+        this.slowFrameStreak++;
+        if (this.slowFrameStreak > 90) {
+          this.autoDowngraded = true;
+          this.applyQualityProfile();
+        }
+      } else {
+        this.slowFrameStreak = Math.max(0, this.slowFrameStreak - 1);
+      }
+    }
 
     const spec = WEAPON_SPECS[this.weaponIdx];
 
@@ -1785,18 +2153,23 @@ export class BandukwaEngine {
       }
       if (this.reloadTimer > 0) {
         this.reloadTimer -= dt;
-        const progress = Math.min(1, 1 - this.reloadTimer / spec.reloadTime);
-        if (this.reloadCueStage === 1 && progress >= 0.56) {
-          this.reloadCueStage = 2;
-          soundEngine.reloadCue('in');
-        } else if (this.reloadCueStage === 2 && progress >= 0.74) {
-          this.reloadCueStage = 3;
-          soundEngine.reloadCue('rack');
+        const progress = Math.min(1, 1 - this.reloadTimer / Math.max(0.1, this.reloadDuration));
+        const stages = getReloadStages(spec.reloadStyle, this.emptyReload);
+        const stageIdx = getReloadStageIndex(spec.reloadStyle, progress, this.emptyReload);
+        while (this.reloadCueStage < stageIdx) {
+          this.reloadCueStage++;
+          const cue = stages[this.reloadCueStage]?.cue;
+          if (cue) {
+            soundEngine.reloadCue(cue);
+            this.triggerReloadStageEffect(cue);
+          }
         }
         if (this.reloadTimer <= 0) {
           this.reloadTimer = 0;
           this.reloadCueStage = 0;
           this.ammo[this.weaponIdx] = spec.mag;
+          this.vmKick = Math.min(1.0, this.vmKick + 0.1);
+          soundEngine.reloadComplete();
           this.emitHud();
         }
       }
@@ -1831,14 +2204,20 @@ export class BandukwaEngine {
         (bot, muz, end, hitPlayer, dmg, head, wallNormal) => {
           this.spawnTracer(muz, end);
           const dist = this.pos.distanceTo(muz);
-          soundEngine.shot(WEAPON_SPECS[bot.weaponIdx].soundType, Math.max(0.1, 1 - dist / 50));
+          soundEngine.shot(WEAPON_SPECS[bot.weaponIdx].id, Math.max(0.1, 1 - dist / 50), false);
           if (hitPlayer && dmg > 0) {
-            this.applyDamageToPlayer(dmg, bot.name, WEAPON_SPECS[bot.weaponIdx].name, head);
+            this.applyDamageToPlayer(dmg, bot.name, WEAPON_SPECS[bot.weaponIdx].name, head, bot.pos);
             if (this.hp <= 0) bot.kills++;
           } else if (wallNormal) {
             this.spawnWallHit(end, wallNormal);
           } else {
             this.burstParticles(end, 6, [1, 0.8, 0.4], 2.4, 0.25);
+          }
+        },
+        (bot) => {
+          const dist = this.pos.distanceTo(bot.pos);
+          if (dist < 18) {
+            soundEngine.remoteFootstep(Math.max(0, 1 - dist / 18));
           }
         },
       );
@@ -1850,6 +2229,7 @@ export class BandukwaEngine {
       this.shotsFired = Math.max(0, this.shotsFired - dt * (this.crouching ? 14 : 11));
     }
     this.vmKick = THREE.MathUtils.damp(this.vmKick, 0, 20, dt);
+    this.reloadKickRoll = THREE.MathUtils.damp(this.reloadKickRoll, 0, 14, dt);
     this.recoilCamPitch = THREE.MathUtils.damp(this.recoilCamPitch, 0, spec.recoilRecovery, dt);
     this.recoilCamYaw = THREE.MathUtils.damp(this.recoilCamYaw, 0, spec.recoilRecovery, dt);
     this.screenShake = Math.max(0, this.screenShake - dt * 1.8);
@@ -1881,7 +2261,8 @@ export class BandukwaEngine {
       );
       const strafeTilt = (this.keys.KeyD ? -0.01 : 0) + (this.keys.KeyA ? 0.01 : 0);
       const slideTilt = this.slideTimer > 0 ? -0.055 : 0;
-      const roll = this.deadTimer > 0 ? 0.85 : strafeTilt + slideTilt;
+      const reloadTilt = this.reloadTimer > 0 ? 0.016 : 0;
+      const roll = this.deadTimer > 0 ? 0.85 : strafeTilt + slideTilt + reloadTilt + this.reloadKickRoll;
       this.camera.rotation.set(
         this.pitch + this.recoilCamPitch + (Math.random() - 0.5) * this.screenShake * 0.025,
         this.yaw + this.recoilCamYaw + (Math.random() - 0.5) * this.screenShake * 0.025,
@@ -1889,62 +2270,30 @@ export class BandukwaEngine {
       );
     }
 
-    // Dynamic FOV (ADS zoom & sprint/slide widen)
+    // Dynamic FOV (ADS zoom, sprint/slide widen & subtle reload focus shift)
     const baseFov = this.settings.fov;
     const targetFov = this.adsActive
       ? baseFov * 0.72
-      : this.slideTimer > 0
-        ? baseFov + 5.5
-        : this.sprinting
-          ? baseFov + 4.5
-          : baseFov;
+      : this.reloadTimer > 0
+        ? baseFov + 2.2
+        : this.slideTimer > 0
+          ? baseFov + 5.5
+          : this.sprinting
+            ? baseFov + 4.5
+            : baseFov;
     const nextFov = THREE.MathUtils.damp(this.camera.fov, targetFov, 14, dt);
     if (Math.abs(nextFov - this.camera.fov) > 0.01) {
       this.camera.fov = nextFov;
       this.camera.updateProjectionMatrix();
     }
 
-    // Viewmodel positioning + 4-stage tactical reload choreography
+    // Viewmodel positioning + per-weapon reload choreography
     const reloadProgress =
-      this.reloadTimer > 0 ? Math.max(0, Math.min(1, 1 - this.reloadTimer / spec.reloadTime)) : 0;
+      this.reloadTimer > 0
+        ? Math.max(0, Math.min(1, 1 - this.reloadTimer / Math.max(0.1, this.reloadDuration)))
+        : 0;
 
-    let rlPosX = 0;
-    let rlPosY = 0;
-    let rlPosZ = 0;
-    let rlRotX = 0;
-    let rlRotY = 0;
-    let rlRotZ = 0;
-
-    if (reloadProgress > 0 && reloadProgress < 1) {
-      if (reloadProgress < 0.62) {
-        // Stages 1-2: Cant gun inward for mag swap + crisp bump on lock-in at 0.56
-        const env = Math.sin((reloadProgress / 0.62) * Math.PI);
-        const lockBump =
-          reloadProgress > 0.52
-            ? Math.sin(((reloadProgress - 0.52) / 0.1) * Math.PI) * 0.026
-            : 0;
-        rlPosX = -0.05 * env;
-        rlPosY = -0.045 * env + lockBump;
-        rlPosZ = 0.04 * env;
-        rlRotX = 0.24 * env + lockBump * 2.0;
-        rlRotY = 0.35 * env;
-        rlRotZ = 0.38 * env;
-      } else if (reloadProgress < 0.86) {
-        // Stage 3: Roll slightly left & pull back during bolt/slide rack
-        const env = Math.sin(((reloadProgress - 0.62) / 0.24) * Math.PI);
-        rlPosX = 0.02 * env;
-        rlPosY = -0.02 * env;
-        rlPosZ = 0.05 * env;
-        rlRotX = 0.14 * env;
-        rlRotY = -0.18 * env;
-        rlRotZ = -0.26 * env;
-      } else {
-        // Stage 4: Settle cleanly back to ready
-        const rem = 1 - (reloadProgress - 0.86) / 0.14;
-        rlPosY = -0.015 * rem;
-        rlRotZ = -0.06 * rem;
-      }
-    }
+    const rlPose = computeReloadViewmodelPose(spec.reloadStyle, reloadProgress, this.emptyReload);
 
     const sprintCant =
       this.sprinting && !this.adsActive && this.reloadTimer <= 0 && this.fireCooldown <= 0 ? 1 : 0;
@@ -1953,26 +2302,34 @@ export class BandukwaEngine {
     const hipY = spec.hipPos[1] + Math.abs(Math.cos(this.bobPhase)) * 0.006 * (horizSpeed / 5);
     const hipZ = spec.hipPos[2];
 
-    const vmX = THREE.MathUtils.lerp(hipX, spec.adsPos[0], this.adsMix) + rlPosX - sprintCant * 0.022;
+    const vmX = THREE.MathUtils.lerp(hipX, spec.adsPos[0], this.adsMix) + rlPose.px - sprintCant * 0.022;
     const vmY =
       THREE.MathUtils.lerp(hipY, spec.adsPos[1], this.adsMix) -
       this.swapTimer * 0.45 +
-      rlPosY -
+      rlPose.py -
       (this.crouching ? 0.016 : 0) -
       sprintCant * 0.028 -
       slideCant * 0.018;
     const vmZ =
-      THREE.MathUtils.lerp(hipZ, spec.adsPos[2], this.adsMix) + this.vmKick * spec.vmKickZ + rlPosZ;
+      THREE.MathUtils.lerp(hipZ, spec.adsPos[2], this.adsMix) + this.vmKick * spec.vmKickZ + rlPose.pz;
 
     this.vmRoot.position.set(vmX, vmY, vmZ);
     this.vmRoot.rotation.set(
-      this.vmKick * spec.vmKickRot + rlRotX - sprintCant * 0.06,
-      rlRotY + sprintCant * 0.12,
-      rlRotZ + (this.crouching ? 0.035 : 0) + sprintCant * 0.05 + slideCant * 0.12,
+      this.vmKick * spec.vmKickRot + rlPose.rx - sprintCant * 0.06,
+      rlPose.ry + sprintCant * 0.12,
+      rlPose.rz + (this.crouching ? 0.035 : 0) + sprintCant * 0.05 + slideCant * 0.12,
     );
 
     const throwProgress = this.grenadeThrowAnim > 0 ? 1 - this.grenadeThrowAnim / 0.3 : 0;
-    this.armsRig.update(spec, reloadProgress, this.vmKick, this.adsMix, dt, throwProgress);
+    this.armsRig.update(
+      spec,
+      reloadProgress,
+      this.vmKick,
+      this.adsMix,
+      dt,
+      throwProgress,
+      this.emptyReload,
+    );
 
     // Muzzle flash decay
     if (this.flashTimer > 0) {
@@ -1983,12 +2340,23 @@ export class BandukwaEngine {
       }
     }
 
-    // Hitmarker & damage vignette decay
+    // Hitmarker, callout & damage vignette decay
     if (this.hitMarkerTimer > 0) {
       this.hitMarkerTimer -= dt;
       if (this.hitMarkerTimer <= 0) this.hitMarker = 'none';
     }
+    if (this.calloutTimer > 0) {
+      this.calloutTimer -= dt;
+      if (this.calloutTimer <= 0) this.calloutText = '';
+    }
+    if (this.streakTimer > 0) {
+      this.streakTimer -= dt;
+      if (this.streakTimer <= 0) this.streakCount = 0;
+    }
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2.4);
+    if (this.damageFlash <= 0.04) {
+      this.damageAngle = null;
+    }
 
     // Update particles
     for (let i = 0; i < this.MAX_PARTICLES; i++) {
@@ -2035,22 +2403,67 @@ export class BandukwaEngine {
       puff.mat.opacity = 0.46 * (1 - p);
     }
 
-    // Interpolate & animate articulated remote P2P players
+    // Update physical dropped magazines
+    for (let i = this.droppedMags.length - 1; i >= 0; i--) {
+      const m = this.droppedMags[i];
+      m.ttl -= dt;
+      if (m.ttl <= 0) {
+        this.scene.remove(m.mesh);
+        m.mat.dispose();
+        this.droppedMags.splice(i, 1);
+        continue;
+      }
+      m.vel.y -= 18 * dt;
+      m.mesh.position.addScaledVector(m.vel, dt);
+      m.mesh.rotation.x += m.angVel.x * dt;
+      m.mesh.rotation.y += m.angVel.y * dt;
+      m.mesh.rotation.z += m.angVel.z * dt;
+      const floorY = Math.max(0.025, m.halfH * 0.45);
+      if (m.mesh.position.y <= floorY) {
+        m.mesh.position.y = floorY;
+        if (!m.bounced && m.vel.y < -1.1) {
+          m.bounced = true;
+          soundEngine.magClatter();
+        }
+        m.vel.y = m.vel.y < -1.2 ? -m.vel.y * 0.22 : 0;
+        m.vel.x *= 0.45;
+        m.vel.z *= 0.45;
+        m.angVel.multiplyScalar(0.35);
+      }
+    }
+
+    // Interpolate & animate articulated remote P2P players (snap on respawn teleports > 6m)
     this.remotes.forEach((r) => {
-      const k = Math.min(1, 14 * dt);
       r.lastPos.copy(r.pos);
-      r.pos.lerp(r.targetPos, k);
+      if (r.pos.distanceToSquared(r.targetPos) > 36) {
+        r.pos.copy(r.targetPos);
+        r.yaw = r.targetYaw;
+      } else {
+        const k = Math.min(1, 22 * dt);
+        r.pos.lerp(r.targetPos, k);
+        r.yaw += shortestAngleDiff(r.yaw, r.targetYaw) * k;
+      }
       const instantSpeed = dt > 1e-4 ? Math.hypot(r.pos.x - r.lastPos.x, r.pos.z - r.lastPos.z) / dt : 0;
       r.horizSpeed = r.horizSpeed * 0.75 + instantSpeed * 0.25;
-      r.yaw += shortestAngleDiff(r.yaw, r.targetYaw) * k;
+      if (r.hp > 0 && r.horizSpeed > 1.6 && !r.crouching) {
+        r.stepAccum += r.horizSpeed * dt;
+        if (r.stepAccum > 2.2) {
+          r.stepAccum = 0;
+          const dist = this.pos.distanceTo(r.pos);
+          if (dist < 18) {
+            soundEngine.remoteFootstep(Math.max(0, 1 - dist / 18));
+          }
+        }
+      }
       r.visual.root.position.copy(r.pos);
       r.visual.root.rotation.y = r.yaw;
       r.visual.animate(dt, r.horizSpeed, r.crouching, r.pitch, true);
     });
 
-    // Periodic P2P state broadcast (20 Hz)
+    // Periodic P2P state broadcast (30 Hz on direct P2P WebRTC, 18 Hz on relay)
+    const netSyncInterval = this.p2p.netMode === 'p2p' ? 0.033 : 0.055;
     this.netSyncAccum += dt;
-    if (this.netSyncAccum >= 0.05) {
+    if (this.netSyncAccum >= netSyncInterval) {
       this.netSyncAccum = 0;
       if (this.started && this.p2p.connectedCount > 0) {
         this.p2p.send({
@@ -2062,6 +2475,8 @@ export class BandukwaEngine {
           w: this.weaponIdx,
           sl: this.crouching ? 1 : 0,
           hp: this.hp,
+          kl: this.me.kills,
+          dt: this.me.deaths,
         });
       }
     }
@@ -2121,6 +2536,37 @@ export class BandukwaEngine {
     const now = performance.now();
     this.killFeed = this.killFeed.filter((k) => now - k.timestamp < 5200);
 
+    // Build tactical radar blips (gunfire within 2.8s, sprinting/close enemies <14m, live frag grenades)
+    const radarBlips: RadarBlip[] = [];
+    for (const b of this.botManager.bots) {
+      if (b.hp <= 0 || b.respawnTimer > 0) continue;
+      const dist = Math.hypot(b.pos.x - this.pos.x, b.pos.z - this.pos.z);
+      if (dist < 14 || b.hadLos || now - b.lastFireTime < 2800) {
+        radarBlips.push({ x: b.pos.x, z: b.pos.z, kind: 'enemy' });
+      }
+    }
+    this.remotes.forEach((r) => {
+      if (r.hp <= 0) return;
+      const dist = Math.hypot(r.pos.x - this.pos.x, r.pos.z - this.pos.z);
+      if (dist < 14 || r.horizSpeed > 4.2 || now - r.lastFireTime < 2800) {
+        radarBlips.push({ x: r.pos.x, z: r.pos.z, kind: 'enemy' });
+      }
+    });
+    for (const g of this.activeGrenades) {
+      radarBlips.push({ x: g.pos.x, z: g.pos.z, kind: 'grenade' });
+    }
+
+    const activeReloadProgress =
+      this.reloadTimer > 0
+        ? Math.max(0, Math.min(1, 1 - this.reloadTimer / Math.max(0.1, this.reloadDuration)))
+        : 0;
+    const reloadStages = getReloadStages(spec.reloadStyle, this.emptyReload);
+    const activeReloadLabel =
+      this.reloadTimer > 0
+        ? (reloadStages[getReloadStageIndex(spec.reloadStyle, activeReloadProgress, this.emptyReload)]?.label ??
+          'Reloading')
+        : '';
+
     this.onHudUpdate({
       hp: Math.max(0, Math.round(this.hp)),
       maxHp: 100,
@@ -2129,7 +2575,9 @@ export class BandukwaEngine {
       weaponIdx: this.weaponIdx,
       weaponName: spec.name,
       reloading: this.reloadTimer > 0,
-      reloadProgress: this.reloadTimer > 0 ? 1 - this.reloadTimer / spec.reloadTime : 0,
+      reloadProgress: activeReloadProgress,
+      reloadStageLabel: activeReloadLabel,
+      emptyReload: this.emptyReload,
       ads: this.adsActive,
       crouching: this.crouching,
       sprinting: this.sprinting,
@@ -2139,6 +2587,8 @@ export class BandukwaEngine {
       crosshairGap: Math.round(rawGap),
       hitMarker: this.hitMarker,
       damageFlash: this.damageFlash,
+      damageAngle: this.damageAngle,
+      callout: this.calloutText,
       scoreboard: rows,
       killFeed: [...this.killFeed],
       pointerLocked: this.pointerLocked,
@@ -2147,6 +2597,8 @@ export class BandukwaEngine {
       mapReady: this.mapReady,
       weaponsReady: this.weaponsReady,
       peerCount: this.p2p.connectedCount,
+      pingMs: this.p2p.pingMs,
+      netMode: this.p2p.netMode,
       grenades: this.grenades,
       maxGrenades: this.maxGrenades,
       grenadeRefillProgress:
@@ -2154,6 +2606,8 @@ export class BandukwaEngine {
       roomCode: this.p2p.roomCode,
       isHostRoom: this.p2p.isHost,
       maxPlayers: MAX_ROOM_PLAYERS,
+      radarPlayer: { x: this.pos.x, z: this.pos.z, yaw: this.yaw },
+      radarBlips,
     });
   }
 
@@ -2191,6 +2645,12 @@ export class BandukwaEngine {
     }
     this.dustPuffs = [];
 
+    for (const mag of this.droppedMags) {
+      this.scene.remove(mag.mesh);
+      mag.mat.dispose();
+    }
+    this.droppedMags = [];
+
     this.botManager.dispose();
     this.remotes.forEach((r) => r.visual.dispose());
     this.remotes.clear();
@@ -2204,6 +2664,7 @@ export class BandukwaEngine {
     this.decalTex.dispose();
     this.decalMat.dispose();
     this.dustGeo.dispose();
+    this.droppedMagGeo.dispose();
     this.grenadeBodyGeo.dispose();
     this.grenadeCollarGeo.dispose();
     this.grenadeLedGeo.dispose();

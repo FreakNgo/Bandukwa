@@ -1,12 +1,16 @@
 import { useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Bomb, Crosshair, Flame, RefreshCw, Repeat } from 'lucide-react';
+import type { CustomHudId, HudConfig } from '../types/game';
 
 interface TouchControlsProps {
   ads: boolean;
   crouching: boolean;
   sprinting: boolean;
   sliding: boolean;
+  reloading: boolean;
+  lowAmmo: boolean;
   grenades: number;
+  hudConfig: HudConfig;
   onMove: (x: number, y: number) => void;
   onLookDelta: (dx: number, dy: number) => void;
   onFireChange: (firing: boolean) => void;
@@ -23,7 +27,10 @@ export function TouchControls({
   crouching,
   sprinting,
   sliding,
+  reloading,
+  lowAmmo,
   grenades,
+  hudConfig,
   onMove,
   onLookDelta,
   onFireChange,
@@ -46,7 +53,8 @@ export function TouchControls({
   const [knobOffset, setKnobOffset] = useState({ x: 0, y: 0 });
   const [sprintEngage, setSprintEngage] = useState(false);
 
-  const MAX_RADIUS = 48;
+  const MAX_RADIUS = 46;
+  const { opacity, scale: globalScale, touchLayout } = hudConfig;
 
   const updateJoy = (cx: number, cy: number) => {
     const dx = cx - joyOrigin.current.x;
@@ -69,7 +77,6 @@ export function TouchControls({
     joyPointerId.current = e.pointerId;
     e.currentTarget.setPointerCapture(e.pointerId);
 
-    // Floating joystick spawns right under thumb inside the left movement pad
     const rect = e.currentTarget.getBoundingClientRect();
     const pad = 54;
     const clampedX = Math.max(rect.left + pad, Math.min(rect.right - pad, e.clientX));
@@ -117,7 +124,7 @@ export function TouchControls({
     lookPointerId.current = null;
   };
 
-  // Drag-to-aim while holding the primary Fire button
+  // Drag-to-aim while holding the primary circular Shoot button
   const handleFireDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     firePointerId.current = e.pointerId;
@@ -143,36 +150,232 @@ export function TouchControls({
   };
 
   const showSlideMode = sprinting || sliding;
+  const circleBtnBase =
+    'pointer-events-auto touch-none select-none flex flex-col items-center justify-center rounded-full border backdrop-blur-sm shadow-lg transition-transform active:scale-90';
+
+  const getCustomStyle = (id: CustomHudId): React.CSSProperties | undefined => {
+    const custom = touchLayout[id];
+    if (!custom) return { opacity };
+    return {
+      position: 'fixed',
+      left: `${custom.x}%`,
+      top: `${custom.y}%`,
+      opacity,
+      transform: `translate(-50%, -50%) scale(${custom.scale * globalScale})`,
+    };
+  };
+
+  const customJoy = touchLayout.joystick;
+
+  const renderRightButton = (id: CustomHudId, inArc: boolean) => {
+    const isCustom = Boolean(touchLayout[id]);
+    if (inArc && isCustom) return null;
+    if (!inArc && !isCustom) return null;
+
+    const style = isCustom ? getCustomStyle(id) : { opacity };
+
+    switch (id) {
+      case 'swap':
+        return (
+          <button
+            key={id}
+            type="button"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onNextWeapon();
+            }}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-[114px] bottom-[112px]'
+            } h-11 w-11 border-white/18 bg-[#0b0f14]/75 text-white`}
+            aria-label="Next weapon"
+          >
+            <Repeat className="h-4 w-4" />
+            <span className="font-mono text-[7.5px] font-bold text-[#cbd5e1]">SWAP</span>
+          </button>
+        );
+      case 'frag':
+        return (
+          <button
+            key={id}
+            type="button"
+            disabled={grenades <= 0}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onGrenade();
+            }}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-[58px] bottom-[118px]'
+            } h-11 w-11 border-white/18 bg-[#0b0f14]/75 text-white disabled:opacity-40`}
+            aria-label="Throw frag grenade"
+          >
+            <Bomb className="h-4 w-4 text-amber-400" />
+            <span className="font-mono text-[7.5px] font-bold text-[#cbd5e1]">FRAG</span>
+            <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 font-mono text-[9px] font-bold tabular-nums text-slate-950">
+              {grenades}
+            </span>
+          </button>
+        );
+      case 'reload':
+        return (
+          <button
+            key={id}
+            type="button"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onReload();
+            }}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-[6px] bottom-[86px]'
+            } h-12 w-12 ${
+              lowAmmo && !reloading
+                ? 'border-amber-400 bg-amber-500/25 text-amber-300'
+                : 'border-white/18 bg-[#0b0f14]/75 text-white'
+            }`}
+            aria-label="Reload"
+          >
+            <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin text-amber-400' : ''}`} />
+            <span className="font-mono text-[8px] font-bold">RLD</span>
+          </button>
+        );
+      case 'jump':
+        return (
+          <button
+            key={id}
+            type="button"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onJump();
+            }}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-[80px] bottom-[62px]'
+            } h-12 w-12 border-white/18 bg-[#0b0f14]/75 text-white`}
+            aria-label="Jump"
+          >
+            <ArrowUp className="h-4 w-4" />
+            <span className="font-mono text-[8px] font-bold text-[#cbd5e1]">JUMP</span>
+          </button>
+        );
+      case 'crouch':
+        return (
+          <button
+            key={id}
+            type="button"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onToggleCrouch();
+            }}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-[134px] bottom-[28px]'
+            } h-12 w-12 ${
+              crouching || sliding
+                ? 'border-amber-400 bg-amber-500 text-slate-950'
+                : showSlideMode
+                  ? 'border-amber-400/80 bg-amber-500/25 text-amber-300'
+                  : 'border-white/18 bg-[#0b0f14]/75 text-white'
+            }`}
+            aria-label="Crouch or slide"
+          >
+            <ArrowDown className="h-4 w-4" />
+            <span className="font-mono text-[8px] font-bold">{showSlideMode ? 'SLIDE' : 'CRCH'}</span>
+          </button>
+        );
+      case 'ads':
+        return (
+          <button
+            key={id}
+            type="button"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onToggleAds();
+            }}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-[84px] bottom-[4px]'
+            } h-12 w-12 ${
+              ads ? 'border-amber-400 bg-amber-500 text-slate-950' : 'border-white/18 bg-[#0b0f14]/75 text-white'
+            }`}
+            aria-label="Aim down sights"
+          >
+            <Crosshair className="h-4 w-4" />
+            <span className="font-mono text-[8px] font-bold">ADS</span>
+          </button>
+        );
+      case 'shoot':
+        return (
+          <button
+            key={id}
+            type="button"
+            onPointerDown={handleFireDown}
+            onPointerMove={handleFireMove}
+            onPointerUp={handleFireUp}
+            onPointerCancel={handleFireUp}
+            style={style}
+            className={`${circleBtnBase} ${
+              isCustom ? '' : 'absolute right-0 bottom-0'
+            } h-[76px] w-[76px] border-2 border-amber-200/90 bg-amber-500/90 text-slate-950 shadow-[0_0_24px_rgba(245,158,11,0.4)]`}
+            aria-label="Fire and aim weapon"
+          >
+            <Flame className="h-7 w-7" />
+            <span className="font-mono text-[9px] font-extrabold tracking-wide">SHOOT</span>
+          </button>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const rightIds: CustomHudId[] = ['swap', 'frag', 'reload', 'jump', 'crouch', 'ads', 'shoot'];
 
   return (
-    <div className="hud-lock pointer-events-none fixed inset-0 z-20">
+    <div
+      onContextMenu={(e) => e.preventDefault()}
+      className="hud-lock pointer-events-none fixed inset-0 z-20 select-none"
+    >
       {/* Right-half touch aim surface */}
       <div
         onPointerDown={handleLookDown}
         onPointerMove={handleLookMove}
         onPointerUp={handleLookUp}
         onPointerCancel={handleLookUp}
-        className="pointer-events-auto absolute inset-y-0 right-0 w-[56%]"
+        className="pointer-events-auto touch-none absolute inset-y-0 right-0 w-[56%]"
         aria-label="Touch aim zone"
       />
 
-      {/* Left-side floating virtual movement joystick zone */}
+      {/* Left-side floating virtual circular movement joystick zone */}
       <div
         onPointerDown={handleJoyDown}
         onPointerMove={handleJoyMove}
         onPointerUp={handleJoyUp}
         onPointerCancel={handleJoyUp}
-        className="pointer-events-auto absolute bottom-0 left-0 h-[55%] w-[44%]"
+        className="pointer-events-auto touch-none absolute bottom-0 left-0 h-[56%] w-[44%]"
         aria-label="Movement joystick zone"
       >
         <div
           style={
             joyCenter
-              ? { left: `${joyCenter.x}px`, top: `${joyCenter.y}px`, transform: 'translate(-50%, -50%)' }
-              : undefined
+              ? {
+                  left: `${joyCenter.x}px`,
+                  top: `${joyCenter.y}px`,
+                  opacity,
+                  transform: `translate(-50%, -50%) scale(${(customJoy?.scale ?? 1) * globalScale})`,
+                }
+              : customJoy
+                ? {
+                    position: 'fixed',
+                    left: `${customJoy.x}%`,
+                    top: `${customJoy.y}%`,
+                    opacity,
+                    transform: `translate(-50%, -50%) scale(${customJoy.scale * globalScale})`,
+                  }
+                : { opacity, transform: `scale(${globalScale})`, transformOrigin: 'bottom left' }
           }
           className={`${
-            joyCenter ? 'absolute' : 'absolute bottom-14 left-5 sm:bottom-16 sm:left-7'
+            joyCenter || customJoy ? 'absolute' : 'absolute bottom-5 left-4 sm:bottom-8 sm:left-6'
           } flex h-28 w-28 items-center justify-center rounded-full border transition-colors ${
             sprintEngage
               ? 'border-amber-400/90 bg-[#0b0f14]/65'
@@ -182,8 +385,8 @@ export function TouchControls({
           }`}
         >
           <span
-            className={`absolute -top-5 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider ${
-              sprintEngage ? 'bg-amber-500 text-slate-950' : 'text-[#94a3b8]/75'
+            className={`absolute -top-5 rounded-full px-2 py-0.5 font-mono text-[9px] font-bold tracking-wider ${
+              sprintEngage ? 'bg-amber-500 text-slate-950' : 'text-[#94a3b8]/80'
             }`}
           >
             SPRINT
@@ -191,15 +394,13 @@ export function TouchControls({
           <div
             style={{ transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)` }}
             className={`h-12 w-12 rounded-full border shadow-lg ${
-              sprintEngage
-                ? 'border-amber-200 bg-amber-400'
-                : 'border-amber-400/75 bg-amber-500/85'
+              sprintEngage ? 'border-amber-200 bg-amber-400' : 'border-amber-400/75 bg-amber-500/85'
             }`}
           />
         </div>
       </div>
 
-      {/* Left-thumb secondary quick-fire button (for simultaneous aim + shoot) */}
+      {/* Left-thumb circular quick-fire button */}
       <button
         type="button"
         onPointerDown={(e) => {
@@ -212,125 +413,33 @@ export function TouchControls({
           onFireChange(false);
         }}
         onPointerCancel={() => onFireChange(false)}
-        className="pointer-events-auto absolute bottom-48 left-5 flex h-12 w-12 flex-col items-center justify-center rounded-xl border border-amber-400/45 bg-[#0b0f14]/75 text-amber-400 active:scale-95 sm:left-7"
+        style={
+          touchLayout.fireLeft
+            ? getCustomStyle('fireLeft')
+            : { opacity, transform: `scale(${globalScale})`, transformOrigin: 'bottom left' }
+        }
+        className={`${circleBtnBase} ${
+          touchLayout.fireLeft ? '' : 'absolute bottom-36 left-4 sm:bottom-44 sm:left-6'
+        } h-[52px] w-[52px] border-amber-400/60 bg-[#0b0f14]/72 text-amber-400`}
         aria-label="Left quick fire"
       >
         <Flame className="h-5 w-5" />
-        <span className="font-mono text-[8px] font-bold">FIRE</span>
+        <span className="font-mono text-[8px] font-bold leading-none">FIRE</span>
       </button>
 
-      {/* Right-thumb ergonomic action cluster */}
-      <div className="pointer-events-auto absolute right-4 bottom-14 flex flex-col items-end gap-2.5 sm:right-6 sm:bottom-16">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            disabled={grenades <= 0}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              onGrenade();
-            }}
-            className="relative flex h-12 w-12 flex-col items-center justify-center rounded-xl border border-white/15 bg-[#0b0f14]/75 text-white active:scale-95 disabled:opacity-40"
-            aria-label="Throw frag grenade"
-          >
-            <Bomb className="h-4 w-4 text-amber-400" />
-            <span className="font-mono text-[8px] font-bold text-[#cbd5e1]">FRAG</span>
-            <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 font-mono text-[9px] font-bold tabular-nums text-slate-950">
-              {grenades}
-            </span>
-          </button>
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              onNextWeapon();
-            }}
-            className="flex h-12 w-12 flex-col items-center justify-center rounded-xl border border-white/15 bg-[#0b0f14]/75 text-white active:scale-95"
-            aria-label="Next weapon"
-          >
-            <Repeat className="h-4 w-4" />
-            <span className="font-mono text-[8px] font-bold text-[#cbd5e1]">SWAP</span>
-          </button>
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              onReload();
-            }}
-            className="flex h-12 w-12 flex-col items-center justify-center rounded-xl border border-white/15 bg-[#0b0f14]/75 text-white active:scale-95"
-            aria-label="Reload"
-          >
-            <RefreshCw className="h-4 w-4" />
-            <span className="font-mono text-[8px] font-bold text-[#cbd5e1]">RLD</span>
-          </button>
-          <button
-            type="button"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              onToggleAds();
-            }}
-            className={`flex h-12 w-12 flex-col items-center justify-center rounded-xl border active:scale-95 ${
-              ads
-                ? 'border-amber-400 bg-amber-500 text-slate-950'
-                : 'border-white/15 bg-[#0b0f14]/75 text-white'
-            }`}
-            aria-label="Aim down sights"
-          >
-            <Crosshair className="h-4 w-4" />
-            <span className="font-mono text-[8px] font-bold">ADS</span>
-          </button>
-        </div>
-
-        <div className="flex items-end gap-2.5">
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                onJump();
-              }}
-              className="flex h-12 w-12 flex-col items-center justify-center rounded-xl border border-white/15 bg-[#0b0f14]/75 text-white active:scale-95"
-              aria-label="Jump"
-            >
-              <ArrowUp className="h-4 w-4" />
-              <span className="font-mono text-[8px] font-bold text-[#cbd5e1]">JUMP</span>
-            </button>
-            <button
-              type="button"
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                onToggleCrouch();
-              }}
-              className={`flex h-12 w-12 flex-col items-center justify-center rounded-xl border active:scale-95 ${
-                crouching || sliding
-                  ? 'border-amber-400 bg-amber-500 text-slate-950'
-                  : showSlideMode
-                    ? 'border-amber-400/80 bg-amber-500/20 text-amber-300'
-                    : 'border-white/15 bg-[#0b0f14]/75 text-white'
-              }`}
-              aria-label="Crouch or slide"
-            >
-              <ArrowDown className="h-4 w-4" />
-              <span className="font-mono text-[8px] font-bold">
-                {showSlideMode ? 'SLIDE' : 'CRCH'}
-              </span>
-            </button>
-          </div>
-
-          {/* Primary Fire + Drag-to-Aim button */}
-          <button
-            type="button"
-            onPointerDown={handleFireDown}
-            onPointerMove={handleFireMove}
-            onPointerUp={handleFireUp}
-            onPointerCancel={handleFireUp}
-            className="flex h-20 w-20 flex-col items-center justify-center rounded-2xl border-2 border-amber-300/85 bg-amber-500/90 text-slate-950 shadow-xl active:scale-95"
-            aria-label="Fire and aim weapon"
-          >
-            <Flame className="h-8 w-8" />
-            <span className="font-mono text-[9px] font-bold">SHOOT</span>
-          </button>
-        </div>
+      {/* Default right-thumb radial arc for non-repositioned buttons */}
+      <div
+        style={{
+          transform: `scale(${globalScale})`,
+          transformOrigin: 'bottom right',
+        }}
+        className="pointer-events-none absolute right-4 bottom-5 h-[172px] w-[190px] sm:right-6 sm:bottom-8"
+      >
+        {rightIds.map((id) => renderRightButton(id, true))}
       </div>
+
+      {/* Custom-positioned right-thumb buttons rendered directly in root viewport coordinates */}
+      {rightIds.map((id) => renderRightButton(id, false))}
     </div>
   );
 }

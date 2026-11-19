@@ -1,6 +1,56 @@
 export type ControlMode = 'auto' | 'desktop' | 'mobile';
 export type LobbyTab = 'solo' | 'host' | 'join';
 export type CrosshairColor = 'green' | 'amber' | 'cyan' | 'white';
+export type GraphicsQuality = 'auto' | 'low' | 'balanced' | 'high';
+
+export type ReloadStyle =
+  | 'ak_rock_lock'
+  | 'deagle_heavy_pistol'
+  | 'g36_paddle_bolt'
+  | 'm1911_speed_slide'
+  | 'mp5_hk_slap'
+  | 'p90_top_mag'
+  | 'scar_bolt_catch';
+
+export type CustomHudId =
+  | 'joystick'
+  | 'fireLeft'
+  | 'shoot'
+  | 'ads'
+  | 'jump'
+  | 'crouch'
+  | 'reload'
+  | 'swap'
+  | 'frag';
+
+export interface CustomHudItemLayout {
+  /** Center X in viewport % (6..94) */
+  x: number;
+  /** Center Y in viewport % (8..94) */
+  y: number;
+  /** Individual scale multiplier (0.75..1.45) */
+  scale: number;
+}
+
+export interface HudConfig {
+  scale: number;
+  opacity: number;
+  showRadar: boolean;
+  showKillFeed: boolean;
+  showStandings: boolean;
+  showWeaponStrip: boolean;
+  touchLayout: Partial<Record<CustomHudId, CustomHudItemLayout>>;
+}
+
+export const DEFAULT_HUD_CONFIG: HudConfig = {
+  scale: 1.0,
+  opacity: 0.92,
+  showRadar: true,
+  showKillFeed: true,
+  showStandings: true,
+  showWeaponStrip: true,
+  touchLayout: {},
+};
 
 export interface SettingsState {
   sensitivity: number;
@@ -8,10 +58,12 @@ export interface SettingsState {
   fov: number;
   volume: number;
   shadows: boolean;
+  graphicsQuality: GraphicsQuality;
   controlMode: ControlMode;
   botCount: number;
   crosshairColor: CrosshairColor;
   crouchToggle: boolean;
+  hudConfig: HudConfig;
 }
 
 export const DEFAULT_SETTINGS: SettingsState = {
@@ -20,10 +72,12 @@ export const DEFAULT_SETTINGS: SettingsState = {
   fov: 80,
   volume: 0.75,
   shadows: true,
+  graphicsQuality: 'auto',
   controlMode: 'auto',
   botCount: 1,
   crosshairColor: 'green',
   crouchToggle: true,
+  hudConfig: DEFAULT_HUD_CONFIG,
 };
 
 export interface WeaponSpec {
@@ -35,6 +89,9 @@ export interface WeaponSpec {
   rpm: number;
   mag: number;
   reloadTime: number;
+  tacReloadTime: number;
+  emptyReloadTime: number;
+  reloadStyle: ReloadStyle;
   /** Standing first-shot base spread */
   spread: number;
   adsSpreadMul: number;
@@ -108,6 +165,12 @@ export interface KillFeedItem {
   timestamp: number;
 }
 
+export interface RadarBlip {
+  x: number;
+  z: number;
+  kind: 'enemy' | 'grenade';
+}
+
 export interface HudSnapshot {
   hp: number;
   maxHp: number;
@@ -117,6 +180,8 @@ export interface HudSnapshot {
   weaponName: string;
   reloading: boolean;
   reloadProgress: number;
+  reloadStageLabel: string;
+  emptyReload: boolean;
   ads: boolean;
   crouching: boolean;
   sprinting: boolean;
@@ -126,6 +191,8 @@ export interface HudSnapshot {
   crosshairGap: number;
   hitMarker: 'none' | 'body' | 'head';
   damageFlash: number;
+  damageAngle: number | null;
+  callout: string;
   scoreboard: CombatantHudRow[];
   killFeed: KillFeedItem[];
   pointerLocked: boolean;
@@ -134,10 +201,33 @@ export interface HudSnapshot {
   mapReady: boolean;
   weaponsReady: boolean;
   peerCount: number;
+  pingMs: number | null;
+  netMode: 'solo' | 'p2p' | 'relay';
   grenades: number;
   maxGrenades: number;
   grenadeRefillProgress: number;
   roomCode: string | null;
   isHostRoom: boolean;
   maxPlayers: number;
+  radarPlayer: { x: number; z: number; yaw: number };
+  radarBlips: RadarBlip[];
 }
+
+export interface LobbyMember {
+  id: number;
+  name: string;
+  cardId: number;
+  ready: boolean;
+  inGame: boolean;
+  isHost: boolean;
+  isMe: boolean;
+  isBot?: boolean;
+}
+
+export interface LobbyChatItem {
+  id: number;
+  sender: string;
+  text: string;
+  isSystem?: boolean;
+}
+

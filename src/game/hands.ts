@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { WeaponSpec } from '../types/game';
+import type { ReloadStyle, WeaponSpec } from '../types/game';
 
 const _shoulder = new THREE.Vector3();
 const _target = new THREE.Vector3();
@@ -92,6 +92,19 @@ function smoothstep01(t: number): number {
   return x * x * (3 - 2 * x);
 }
 
+const MAG_APPEARANCE: Record<
+  ReloadStyle,
+  { sx: number; sy: number; sz: number; bodyCol: number; plateCol: number }
+> = {
+  ak_rock_lock: { sx: 1.0, sy: 1.18, sz: 1.05, bodyCol: 0x6b3a1e, plateCol: 0x262626 },
+  deagle_heavy_pistol: { sx: 0.95, sy: 0.85, sz: 0.85, bodyCol: 0x9ca3af, plateCol: 0x18181b },
+  g36_paddle_bolt: { sx: 1.0, sy: 1.05, sz: 1.0, bodyCol: 0x252b33, plateCol: 0xd97706 },
+  m1911_speed_slide: { sx: 0.72, sy: 0.78, sz: 0.72, bodyCol: 0x4b5563, plateCol: 0x111827 },
+  mp5_hk_slap: { sx: 0.74, sy: 1.15, sz: 0.65, bodyCol: 0x181c22, plateCol: 0x374151 },
+  p90_top_mag: { sx: 1.25, sy: 0.28, sz: 3.1, bodyCol: 0x6b5b3e, plateCol: 0x1f2937 },
+  scar_bolt_catch: { sx: 1.15, sy: 0.96, sz: 1.2, bodyCol: 0x9a8260, plateCol: 0x292524 },
+};
+
 export class TacticalArmsRig {
   readonly group = new THREE.Group();
   private rightHand: THREE.Group;
@@ -99,6 +112,9 @@ export class TacticalArmsRig {
   private leftHand: THREE.Group;
   private leftForearm: THREE.Group;
   private magGroup: THREE.Group;
+  private magBodyMat: THREE.MeshStandardMaterial;
+  private magPlateMat: THREE.MeshStandardMaterial;
+  private activeMagStyle: ReloadStyle | null = null;
 
   private curRight = new THREE.Vector3(0.0, -0.03, 0.06);
   private curLeft = new THREE.Vector3(-0.01, 0.02, -0.19);
@@ -111,18 +127,27 @@ export class TacticalArmsRig {
     this.leftHand = l.handGroup;
     this.leftForearm = l.forearm;
 
-    // Detachable tactical magazine visible during reload animation
+    // Detachable weapon-styled magazine visible during reload choreography
     this.magGroup = new THREE.Group();
-    const magBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.026, 0.115, 0.046),
-      new THREE.MeshStandardMaterial({ color: 0x1c2026, metalness: 0.45, roughness: 0.4 }),
+    this.magBodyMat = new THREE.MeshStandardMaterial({
+      color: 0x1c2026,
+      metalness: 0.45,
+      roughness: 0.4,
+    });
+    this.magPlateMat = new THREE.MeshStandardMaterial({
+      color: 0xd97706,
+      metalness: 0.2,
+      roughness: 0.5,
+    });
+    const magBody = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.135, 0.054), this.magBodyMat);
+    const magPlate = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.018, 0.06), this.magPlateMat);
+    magPlate.position.y = -0.066;
+    const magRounds = new THREE.Mesh(
+      new THREE.BoxGeometry(0.022, 0.016, 0.044),
+      new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.78, roughness: 0.25 }),
     );
-    const magPlate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.016, 0.052),
-      new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.2, roughness: 0.5 }),
-    );
-    magPlate.position.y = -0.056;
-    this.magGroup.add(magBody, magPlate);
+    magRounds.position.y = 0.068;
+    this.magGroup.add(magBody, magPlate, magRounds);
     this.magGroup.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) o.frustumCulled = false;
     });
@@ -131,8 +156,18 @@ export class TacticalArmsRig {
     this.group.add(this.rightHand, this.rightForearm, this.leftHand, this.leftForearm, this.magGroup);
   }
 
+  private syncMagAppearance(style: ReloadStyle): void {
+    if (this.activeMagStyle === style) return;
+    this.activeMagStyle = style;
+    const cfg = MAG_APPEARANCE[style];
+    this.magGroup.scale.set(cfg.sx, cfg.sy, cfg.sz);
+    this.magBodyMat.color.setHex(cfg.bodyCol);
+    this.magPlateMat.color.setHex(cfg.plateCol);
+  }
+
   /**
    * @param reloadProgress 0 when not reloading, 0 -> 1 across reload duration
+   * @param emptyReload true when reloading from 0 rounds (performs bolt/slide/slap stage)
    * @param throwProgress 0 when not throwing, 0 -> 1 across throw duration
    */
   update(
@@ -142,25 +177,26 @@ export class TacticalArmsRig {
     adsMix: number,
     dt: number,
     throwProgress = 0,
+    emptyReload = true,
   ): void {
+    this.syncMagAppearance(spec.reloadStyle);
+
     const scale = spec.vmScale;
     const rx = spec.rightHandLocal[0] * scale;
     const ry = spec.rightHandLocal[1] * scale;
     const rz = spec.rightHandLocal[2] * scale;
 
-    let lx = spec.leftHandLocal[0] * scale;
-    let ly = spec.leftHandLocal[1] * scale;
-    let lz = spec.leftHandLocal[2] * scale;
+    const restLx = spec.leftHandLocal[0] * scale;
+    const restLy = spec.leftHandLocal[1] * scale;
+    const restLz = spec.leftHandLocal[2] * scale;
 
-    // Magazine well anchor (in front of pistol grip for rifles/SMGs, bottom of grip for pistols)
+    let lx = restLx;
+    let ly = restLy;
+    let lz = restLz;
+
     const magWellX = 0;
-    const magWellY = spec.isPistol ? ry - 0.05 : ry - 0.02;
-    const magWellZ = spec.isPistol ? rz + 0.01 : rz - 0.095;
-
-    // Charging handle / slide anchor
-    const rackX = -0.045;
-    const rackY = ry + 0.095;
-    const rackZ = spec.isPistol ? rz - 0.03 : rz - 0.05;
+    const magWellY = spec.isPistol ? ry - 0.042 : ry - 0.015;
+    const magWellZ = spec.isPistol ? rz + 0.01 : rz - 0.1;
 
     const reloading = reloadProgress > 0 && reloadProgress < 1;
     const throwing = !reloading && throwProgress > 0 && throwProgress < 1;
@@ -169,46 +205,175 @@ export class TacticalArmsRig {
     let leftRotZ = spec.isPistol ? 0.45 : 0.68;
 
     if (reloading) {
-      if (reloadProgress < 0.24) {
-        // Stage 1: Reach to mag well & drop empty magazine
-        const t = smoothstep01(reloadProgress / 0.24);
-        lx = THREE.MathUtils.lerp(lx, magWellX - 0.02, t);
-        ly = THREE.MathUtils.lerp(ly, magWellY - 0.08 * t, t);
-        lz = THREE.MathUtils.lerp(lz, magWellZ, t);
-        leftRotZ = THREE.MathUtils.lerp(leftRotZ, 0.25, t);
-        this.magGroup.visible = t > 0.35;
-        this.magGroup.position.set(magWellX, magWellY - 0.24 * Math.max(0, t - 0.35), magWellZ);
-        this.magGroup.rotation.set(0.18 * t, 0, 0.08 * t);
-      } else if (reloadProgress < 0.62) {
-        // Stage 2: Bring fresh magazine up from chest pouch into receiver
-        const t = smoothstep01((reloadProgress - 0.24) / 0.38);
-        const arcY = THREE.MathUtils.lerp(-0.28, 0.0, t);
-        lx = magWellX - 0.025 * (1 - t);
-        ly = magWellY + arcY;
-        lz = magWellZ + 0.02 * (1 - t);
-        leftRotZ = 0.2;
-        this.magGroup.visible = true;
-        this.magGroup.position.set(magWellX, magWellY + arcY + 0.02, magWellZ);
-        this.magGroup.rotation.set(0.12 * (1 - t), 0, 0);
-      } else if (reloadProgress < 0.86) {
-        // Stage 3: Reach up and rack the charging handle / slide
-        this.magGroup.visible = false;
-        const p = (reloadProgress - 0.62) / 0.24;
-        const grab = smoothstep01(Math.min(1, p / 0.35));
-        const pull = Math.sin(Math.max(0, Math.min(1, (p - 0.3) / 0.55)) * Math.PI);
-        lx = THREE.MathUtils.lerp(magWellX, rackX, grab);
-        ly = THREE.MathUtils.lerp(magWellY, rackY, grab);
-        lz = THREE.MathUtils.lerp(magWellZ, rackZ + pull * 0.065, grab);
-        leftRotX = -0.15;
-        leftRotY = 0.25;
-        leftRotZ = 0.15;
+      const style = spec.reloadStyle;
+      if (style === 'p90_top_mag') {
+        // Horizontal top-mounted 50-round magazine lift, seat & palm smack (+ side charge if empty)
+        const topX = 0;
+        const topY = ry + 0.095;
+        const topZ = rz - 0.11;
+        const swapEnd = emptyReload ? 0.72 : 0.88;
+        if (reloadProgress < 0.26) {
+          const t = smoothstep01(reloadProgress / 0.26);
+          lx = THREE.MathUtils.lerp(restLx, topX - 0.02, t);
+          ly = THREE.MathUtils.lerp(restLy, topY + 0.16 * t, t);
+          lz = THREE.MathUtils.lerp(restLz, topZ, t);
+          this.magGroup.visible = t > 0.12;
+          this.magGroup.position.set(topX, topY + 0.2 * Math.max(0, t - 0.1), topZ);
+          this.magGroup.rotation.set(0.1 * t, 0, -0.22 * t);
+          leftRotX = -0.35;
+          leftRotZ = 0.2;
+        } else if (reloadProgress < swapEnd) {
+          const t = smoothstep01((reloadProgress - 0.26) / (swapEnd - 0.26));
+          const seatDrop = t < 0.68 ? THREE.MathUtils.lerp(0.22, 0.02, smoothstep01(t / 0.68)) : 0.0;
+          const smackBump = t >= 0.68 ? Math.sin(((t - 0.68) / 0.32) * Math.PI) * 0.04 : 0;
+          lx = topX - 0.02 * (1 - t);
+          ly = topY + seatDrop + smackBump;
+          lz = topZ;
+          this.magGroup.visible = true;
+          this.magGroup.position.set(topX, topY + seatDrop * 0.92, topZ);
+          this.magGroup.rotation.set(0, 0, 0);
+          leftRotX = -0.25;
+          leftRotZ = 0.15;
+        } else {
+          this.magGroup.visible = false;
+          const p = (reloadProgress - swapEnd) / (1 - swapEnd);
+          const pull = Math.sin(Math.min(1, p / 0.7) * Math.PI);
+          lx = THREE.MathUtils.lerp(topX - 0.04, restLx, smoothstep01(p));
+          ly = THREE.MathUtils.lerp(ry + 0.04, restLy, smoothstep01(p));
+          lz = THREE.MathUtils.lerp(rz - 0.12 + pull * 0.065, restLz, smoothstep01(p));
+        }
+      } else if (style === 'mp5_hk_slap' && emptyReload) {
+        // Lock front cocking handle -> swap curved 9mm mag -> H&K slap down!
+        const tubeX = -0.042;
+        const tubeY = ry + 0.12;
+        const tubeZ = rz - 0.26;
+        if (reloadProgress < 0.24) {
+          this.magGroup.visible = false;
+          const t = smoothstep01(reloadProgress / 0.24);
+          const pull = Math.sin(t * Math.PI);
+          lx = THREE.MathUtils.lerp(restLx, tubeX, t);
+          ly = THREE.MathUtils.lerp(restLy, tubeY + 0.025 * pull, t);
+          lz = THREE.MathUtils.lerp(restLz, tubeZ + 0.055 * pull, t);
+          leftRotZ = 0.22;
+        } else if (reloadProgress < 0.62) {
+          const p = (reloadProgress - 0.24) / 0.38;
+          if (p < 0.38) {
+            const t = smoothstep01(p / 0.38);
+            lx = THREE.MathUtils.lerp(tubeX, magWellX - 0.02, t);
+            ly = THREE.MathUtils.lerp(tubeY, magWellY - 0.07 * t, t);
+            lz = THREE.MathUtils.lerp(tubeZ, magWellZ, t);
+            this.magGroup.visible = true;
+            this.magGroup.position.set(magWellX, magWellY - 0.18 * t, magWellZ);
+            this.magGroup.rotation.set(0.28 * t, 0, 0);
+          } else {
+            const t = smoothstep01((p - 0.38) / 0.62);
+            const arcY = THREE.MathUtils.lerp(-0.21, 0.0, t);
+            lx = magWellX - 0.02 * (1 - t);
+            ly = magWellY + arcY;
+            lz = magWellZ;
+            this.magGroup.visible = true;
+            this.magGroup.position.set(magWellX, magWellY + arcY + 0.02, magWellZ);
+            this.magGroup.rotation.set(0.2 * (1 - t), 0, 0);
+          }
+          leftRotZ = 0.25;
+        } else if (reloadProgress < 0.87) {
+          // H&K Slap downward onto cocking tube
+          this.magGroup.visible = false;
+          const p = (reloadProgress - 0.62) / 0.25;
+          const slap = p < 0.45 ? smoothstep01(p / 0.45) : 1 - smoothstep01((p - 0.45) / 0.55);
+          lx = THREE.MathUtils.lerp(magWellX, tubeX, Math.min(1, p * 2.2));
+          ly = THREE.MathUtils.lerp(magWellY, tubeY + 0.095 * (1 - slap), Math.min(1, p * 2.2)) - 0.055 * slap;
+          lz = THREE.MathUtils.lerp(magWellZ, tubeZ, Math.min(1, p * 2.2));
+          leftRotX = -0.42;
+          leftRotZ = 0.06;
+        } else {
+          this.magGroup.visible = false;
+          const t = smoothstep01((reloadProgress - 0.87) / 0.13);
+          lx = THREE.MathUtils.lerp(tubeX, restLx, t);
+          ly = THREE.MathUtils.lerp(tubeY, restLy, t);
+          lz = THREE.MathUtils.lerp(tubeZ, restLz, t);
+        }
       } else {
-        // Stage 4: Return smoothly to ready grip
-        this.magGroup.visible = false;
-        const t = smoothstep01((reloadProgress - 0.86) / 0.14);
-        lx = THREE.MathUtils.lerp(rackX, lx, t);
-        ly = THREE.MathUtils.lerp(rackY, ly, t);
-        lz = THREE.MathUtils.lerp(rackZ, lz, t);
+        // Mag swap phase (scaled depending on tactical vs empty reload)
+        const swapEnd = emptyReload ? 0.6 : 0.84;
+        const dropEnd = swapEnd * 0.42;
+
+        if (reloadProgress < dropEnd) {
+          const t = smoothstep01(reloadProgress / dropEnd);
+          const forwardTilt = style === 'ak_rock_lock' ? -0.055 * t : 0;
+          lx = THREE.MathUtils.lerp(restLx, magWellX - 0.022, t);
+          ly = THREE.MathUtils.lerp(restLy, magWellY - 0.06 * t, t);
+          lz = THREE.MathUtils.lerp(restLz, magWellZ + forwardTilt, t);
+          leftRotZ = THREE.MathUtils.lerp(leftRotZ, 0.24, t);
+          this.magGroup.visible = t > 0.08;
+          this.magGroup.position.set(
+            magWellX,
+            magWellY - 0.19 * Math.max(0, t - 0.08),
+            magWellZ + forwardTilt,
+          );
+          this.magGroup.rotation.set((style === 'ak_rock_lock' ? 0.48 : 0.2) * t, 0, 0.08 * t);
+        } else if (reloadProgress < swapEnd) {
+          const t = smoothstep01((reloadProgress - dropEnd) / (swapEnd - dropEnd));
+          const arcY = THREE.MathUtils.lerp(-0.21, 0.01, t);
+          const rockRot = style === 'ak_rock_lock' ? 0.52 * (1 - t) : 0.14 * (1 - t);
+          const tapOffset = style === 'g36_paddle_bolt' && !emptyReload && t > 0.72
+            ? -Math.sin(((t - 0.72) / 0.28) * Math.PI) * 0.036
+            : 0;
+          lx = magWellX - 0.025 * (1 - t);
+          ly = magWellY + arcY + tapOffset;
+          lz = magWellZ + 0.02 * (1 - t);
+          leftRotZ = 0.2;
+          this.magGroup.visible = true;
+          this.magGroup.position.set(magWellX, magWellY + arcY + 0.02, magWellZ);
+          this.magGroup.rotation.set(rockRot, 0, 0);
+        } else if (emptyReload && reloadProgress < 0.88) {
+          // Empty chamber action: distinct per-gun bolt/slide/paddle motion
+          this.magGroup.visible = false;
+          const p = (reloadProgress - swapEnd) / (0.88 - swapEnd);
+          const grab = smoothstep01(Math.min(1, p / 0.35));
+          const act = Math.sin(Math.max(0, Math.min(1, (p - 0.3) / 0.55)) * Math.PI);
+
+          let targetX = -0.045;
+          let targetY = ry + 0.09;
+          let targetZ = spec.isPistol ? rz - 0.03 : rz - 0.05;
+
+          if (style === 'ak_rock_lock') {
+            // Reach across/over receiver to right-side AK charging handle
+            targetX = 0.048;
+            targetY = ry + 0.098;
+            targetZ = rz - 0.07 + act * 0.085;
+          } else if (style === 'scar_bolt_catch') {
+            // Left-side ping-pong bolt-catch slap
+            targetX = -0.058 + act * 0.036;
+            targetY = ry + 0.05;
+            targetZ = rz - 0.095;
+          } else if (style === 'deagle_heavy_pistol' || style === 'm1911_speed_slide') {
+            // Thumb / palm slide release
+            targetX = -0.03;
+            targetY = ry + 0.072;
+            targetZ = rz - 0.01 + act * 0.032;
+          } else {
+            // G36C top folding bolt flick
+            targetX = -0.02;
+            targetY = ry + 0.13;
+            targetZ = rz - 0.08 + act * 0.068;
+          }
+
+          lx = THREE.MathUtils.lerp(magWellX, targetX, grab);
+          ly = THREE.MathUtils.lerp(magWellY, targetY, grab);
+          lz = THREE.MathUtils.lerp(magWellZ, targetZ, grab);
+          leftRotX = -0.18;
+          leftRotY = 0.28;
+          leftRotZ = 0.15;
+        } else {
+          // Smooth return to foregrip
+          this.magGroup.visible = false;
+          const settleStart = emptyReload ? 0.88 : swapEnd;
+          const t = smoothstep01((reloadProgress - settleStart) / (1 - settleStart));
+          lx = THREE.MathUtils.lerp(magWellX - 0.02, restLx, t);
+          ly = THREE.MathUtils.lerp(magWellY + 0.03, restLy, t);
+          lz = THREE.MathUtils.lerp(magWellZ, restLz, t);
+        }
       }
     } else if (throwing) {
       this.magGroup.visible = false;
